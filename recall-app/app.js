@@ -1,8 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
   const memory = new RecallMemory();
   const engine = new RecallEngine(memory);
-  const API_BASE = window.location.port === '8000' ? '' : 'http://127.0.0.1:8000';
-  const apiUrl = path => `${API_BASE}${path}`;
+  const apiUrl = path => window.MedBriefRuntime
+    ? window.MedBriefRuntime.apiUrl(path)
+    : (path.startsWith('/') ? path : `/${path}`);
 
   let currentConversationId = null;
   let currentTheme = localStorage.getItem('recall_theme') || 'dark';
@@ -38,18 +39,23 @@ document.addEventListener('DOMContentLoaded', () => {
   const apiKeyDisplay = $('api-key-display');
   const apiKeyValue = $('api-key-value');
   const apiKeyCopy = $('api-key-copy');
+  const developerAccessSection = $('developer-access-section');
   const clearMemoryBtn = $('clear-memory');
   const prefMaxTokens = $('pref-max-tokens');
   const prefTemperature = $('pref-temperature');
+  const prefTerminology = $('pref-terminology');
+  const prefResponseLength = $('pref-response-length');
+  const prefTone = $('pref-tone');
 
-  function init() {
+  async function init() {
     applyTheme(currentTheme);
     renderConversationList();
     setupEventListeners();
     autoResizeInput();
-    loadRuntimeConfig();
-    loadSavedApiKey();
     loadPreferences();
+    await loadRuntimeConfig();
+    await engine.syncProfile();
+    loadSavedApiKey();
 
     if (window.innerWidth <= 768) {
       sidebar.classList.add('collapsed');
@@ -130,9 +136,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.target === settingsModal) settingsModal.style.display = 'none';
     });
 
-    generateApiKeyBtn.addEventListener('click', handleGenerateApiKey);
-    revokeApiKeyBtn.addEventListener('click', handleRevokeApiKey);
-    apiKeyCopy.addEventListener('click', handleCopyApiKey);
+    if (generateApiKeyBtn) {
+      generateApiKeyBtn.addEventListener('click', handleGenerateApiKey);
+    }
+    if (revokeApiKeyBtn) {
+      revokeApiKeyBtn.addEventListener('click', handleRevokeApiKey);
+    }
+    if (apiKeyCopy) {
+      apiKeyCopy.addEventListener('click', handleCopyApiKey);
+    }
     clearMemoryBtn.addEventListener('click', handleClearMemory);
 
     prefMaxTokens.addEventListener('change', () => {
@@ -147,6 +159,21 @@ document.addEventListener('DOMContentLoaded', () => {
       prefTemperature.value = val;
       RECALL_CONFIG.TEMPERATURE = val;
       localStorage.setItem('recall_temperature', val);
+    });
+
+    prefTerminology.addEventListener('change', async () => {
+      memory.updatePreferences({ terminology: prefTerminology.value });
+      await engine.syncProfile();
+    });
+
+    prefResponseLength.addEventListener('change', async () => {
+      memory.updatePreferences({ response_length: prefResponseLength.value });
+      await engine.syncProfile();
+    });
+
+    prefTone.addEventListener('change', async () => {
+      memory.updatePreferences({ tone: prefTone.value });
+      await engine.syncProfile();
     });
 
     welcomePrompts.addEventListener('click', (e) => {
@@ -174,7 +201,120 @@ document.addEventListener('DOMContentLoaded', () => {
     messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + 'px';
   }
 
-  function handleSend() {
+  function clearRequestErrors() {
+    document.querySelectorAll('.request-error').forEach(el => el.remove());
+  }
+
+  function discardAssistantDraft() {
+    if (currentAssistantEl) {
+      currentAssistantEl.remove();
+      currentAssistantEl = null;
+      currentAssistantContent = '';
+    }
+  }
+
+  function describeRequestError(error) {
+    const base = (error?.message || '').trim() || 'Something went wrong - please try again.';
+    const requestId = error?.requestId ? ` Request ID: ${error.requestId}.` : '';
+    return `${base}${requestId}`;
+  }
+
+  function appendRequestError(error) {
+    const el = document.createElement('div');
+    el.className = 'request-error';
+    el.innerHTML = `
+      <div class="request-error-copy">
+        <strong>Something went wrong.</strong>
+        <span>${escapeHtml(describeRequestError(error))}</span>
+      </div>
+    `;
+
+    const actions = document.createElement('div');
+    actions.className = 'message-actions';
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'feedback-btn retry-btn';
+    retryBtn.textContent = 'Retry last message';
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      el.remove();
+      await requestAssistantRetry();
+    });
+
+    actions.appendChild(retryBtn);
+    el.appendChild(actions);
+    messagesContainer.appendChild(el);
+    scrollToBottom();
+  }
+
+  async function requestAssistantReply(text) {
+    clearRequestErrors();
+    setStatus('thinking');
+    showTypingIndicator();
+
+    await engine.sendMessage(
+      currentConversationId,
+      text,
+      (chunk) => {
+        hideTypingIndicator();
+        appendAssistantChunk(chunk);
+        scrollToBottom();
+      },
+      (fullContent) => {
+        finalizeAssistantMessage(fullContent);
+        setStatus('ready');
+        renderConversationList();
+        scrollToBottom();
+      },
+      (error) => {
+        hideTypingIndicator();
+        console.error(error);
+        if (currentAssistantContent.trim()) {
+          finalizeAssistantMessage(currentAssistantContent);
+        } else {
+          discardAssistantDraft();
+        }
+        setStatus('degraded', 'Something went wrong - retry is available');
+        renderConversationList();
+        appendRequestError(error);
+      }
+    );
+  }
+
+  async function requestAssistantRetry() {
+    clearRequestErrors();
+    setStatus('thinking');
+    showTypingIndicator();
+
+    await engine.retryLastMessage(
+      currentConversationId,
+      (chunk) => {
+        hideTypingIndicator();
+        appendAssistantChunk(chunk);
+        scrollToBottom();
+      },
+      (fullContent) => {
+        finalizeAssistantMessage(fullContent);
+        setStatus('ready');
+        renderConversationList();
+        scrollToBottom();
+      },
+      (error) => {
+        hideTypingIndicator();
+        console.error(error);
+        if (currentAssistantContent.trim()) {
+          finalizeAssistantMessage(currentAssistantContent);
+        } else {
+          discardAssistantDraft();
+        }
+        setStatus('degraded', 'Something went wrong - retry is available');
+        renderConversationList();
+        appendRequestError(error);
+      }
+    );
+  }
+
+  async function handleSend() {
     const text = messageInput.value.trim();
     if (!text || engine.isGenerating) return;
 
@@ -191,29 +331,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoResizeInput();
     sendBtn.disabled = true;
 
-    setStatus('thinking');
-    showTypingIndicator();
-
-    engine.sendMessage(
-      currentConversationId,
-      text,
-      (chunk) => {
-        hideTypingIndicator();
-        appendAssistantChunk(chunk);
-        scrollToBottom();
-      },
-      (fullContent) => {
-        finalizeAssistantMessage(fullContent);
-        setStatus('ready');
-        renderConversationList();
-        scrollToBottom();
-      },
-      (error) => {
-        hideTypingIndicator();
-        setStatus('ready');
-        appendSystemMessage('Something went wrong. Please try again.');
-      }
-    );
+    await requestAssistantReply(text);
   }
 
   function startNewConversation() {
@@ -291,6 +409,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (currentAssistantEl) {
       const contentEl = currentAssistantEl.querySelector('.message-content');
       contentEl.innerHTML = engine.parseMarkdown(fullContent);
+      const conversationId = currentConversationId;
+      if (RECALL_CONFIG.ENABLED_FEATURES?.feedbackEnabled && conversationId) {
+        addFeedbackControls(currentAssistantEl, conversationId, fullContent);
+      }
 
       if (engine.detectCrisis(fullContent) || containsCrisisResources(fullContent)) {
         addSafetyBanner(currentAssistantEl);
@@ -301,7 +423,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function containsCrisisResources(text) {
-    return text.includes('988') && (text.includes('crisis') || text.includes('Crisis'));
+    const lower = (text || '').toLowerCase();
+    return lower.includes('988') || lower.includes('741741') || lower.includes('emergency services');
   }
 
   function addSafetyBanner(messageEl) {
@@ -346,13 +469,16 @@ document.addEventListener('DOMContentLoaded', () => {
     scrollToBottom();
   }
 
-  function setStatus(status) {
+  function setStatus(status, detail = '') {
     const dot = headerStatus.querySelector('.status-dot');
     const span = headerStatus.querySelector('span');
 
     if (status === 'thinking') {
       dot.style.background = 'var(--accent-primary)';
       span.textContent = 'MedBrief AI is thinking…';
+    } else if (status === 'degraded') {
+      dot.style.background = '#F59E0B';
+      span.textContent = detail || 'MedBrief AI is in degraded mode';
     } else {
       dot.style.background = 'var(--success)';
       span.textContent = 'MedBrief AI is ready';
@@ -459,7 +585,59 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="message-meta"><span class="message-time">${time}</span></div>
       </div>
     `;
+    if (RECALL_CONFIG.ENABLED_FEATURES?.feedbackEnabled && currentConversationId) {
+      addFeedbackControls(el, currentConversationId, msg.content);
+    }
+    if (engine.detectCrisis(msg.content) || containsCrisisResources(msg.content)) {
+      addSafetyBanner(el);
+    }
     messagesContainer.appendChild(el);
+  }
+
+  function addFeedbackControls(messageEl, conversationId, assistantText) {
+    if (messageEl.querySelector('.message-actions')) return;
+
+    const actions = document.createElement('div');
+    actions.className = 'message-actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.className = 'feedback-btn';
+    upBtn.innerHTML = '👍 Helpful';
+
+    const downBtn = document.createElement('button');
+    downBtn.className = 'feedback-btn';
+    downBtn.innerHTML = '👎 Not quite';
+
+    const submit = async (rating, button) => {
+      const lastUserPrompt = memory.latestUserPrompt(conversationId);
+      upBtn.classList.remove('active');
+      downBtn.classList.remove('active');
+      button.classList.add('active');
+
+      try {
+        await fetch(apiUrl('/v1/feedback'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: memory.getUserId(),
+            conversation_id: conversationId,
+            rating,
+            prompt: lastUserPrompt,
+            response: assistantText,
+            mode: engine.detectMode(lastUserPrompt)
+          })
+        });
+      } catch {
+      }
+    };
+
+    upBtn.addEventListener('click', () => submit('up', upBtn));
+    downBtn.addEventListener('click', () => submit('down', downBtn));
+
+    actions.appendChild(upBtn);
+    actions.appendChild(downBtn);
+    messageEl.querySelector('.message-content').appendChild(actions);
   }
 
   function deleteConversation(id) {
@@ -543,65 +721,112 @@ document.addEventListener('DOMContentLoaded', () => {
 
     prefMaxTokens.value = RECALL_CONFIG.MAX_TOKENS;
     prefTemperature.value = RECALL_CONFIG.TEMPERATURE;
+    prefTerminology.value = memory.profile?.preferences?.terminology || 'lay';
+    prefResponseLength.value = memory.profile?.preferences?.response_length || 'balanced';
+    prefTone.value = memory.profile?.preferences?.tone || 'supportive';
+  }
+
+  function updateFeatureVisibility() {
+    const features = RECALL_CONFIG.ENABLED_FEATURES || {};
+    if (developerAccessSection) {
+      developerAccessSection.style.display = features.apiKeysEnabled ? '' : 'none';
+    }
+    if (moodCheckBtn) {
+      moodCheckBtn.style.display = features.moodCheckEnabled === false ? 'none' : '';
+    }
+  }
+
+  async function refreshHealthStatus() {
+    try {
+      const response = await fetch(apiUrl('/health'), { credentials: 'include' });
+      if (!response.ok) {
+        throw new Error(`Health check failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      if (payload.engine === 'mock') {
+        setStatus('degraded', 'MedBrief AI is running in demo mode');
+      } else if (payload.status !== 'healthy') {
+        setStatus('degraded', 'Service temporarily degraded - please retry');
+      } else {
+        setStatus('ready');
+      }
+    } catch {
+      setStatus('degraded', 'Health check unavailable');
+    }
   }
 
   async function loadRuntimeConfig() {
     try {
+      const staticRuntime = window.MedBriefRuntime
+        ? await window.MedBriefRuntime.load()
+        : {};
+
+      RECALL_CONFIG.MODEL = staticRuntime.defaultModel || RECALL_CONFIG.MODEL;
+      RECALL_CONFIG.API_ENDPOINT = apiUrl('/v1/chat/completions');
+      RECALL_CONFIG.STREAM = staticRuntime.stream ?? RECALL_CONFIG.STREAM;
+      RECALL_CONFIG.ENABLED_FEATURES = {
+        ...RECALL_CONFIG.ENABLED_FEATURES,
+        ...(staticRuntime.enabledFeatures || {})
+      };
+
+      if (!localStorage.getItem('recall_max_tokens') && staticRuntime.maxTokensDefault) {
+        RECALL_CONFIG.MAX_TOKENS = staticRuntime.maxTokensDefault;
+      }
+      if (!localStorage.getItem('recall_temperature') && typeof staticRuntime.temperatureDefault === 'number') {
+        RECALL_CONFIG.TEMPERATURE = staticRuntime.temperatureDefault;
+      }
+
       const response = await fetch(apiUrl('/api/config'), { credentials: 'include' });
-      if (!response.ok) return;
-      runtimeConfig = await response.json();
-      RECALL_CONFIG.MODEL = runtimeConfig.active_model || runtimeConfig.model_id || RECALL_CONFIG.MODEL;
-      RECALL_CONFIG.API_ENDPOINT = apiUrl('/api/chat/completions');
-      if (!localStorage.getItem('recall_max_tokens') && runtimeConfig?.default_generation?.max_new_tokens) {
-        RECALL_CONFIG.MAX_TOKENS = runtimeConfig.default_generation.max_new_tokens;
+      if (response.ok) {
+        runtimeConfig = await response.json();
+        RECALL_CONFIG.MODEL = runtimeConfig.active_model || runtimeConfig.model_id || RECALL_CONFIG.MODEL;
+        RECALL_CONFIG.STREAM = runtimeConfig.stream_default ?? RECALL_CONFIG.STREAM;
+        RECALL_CONFIG.ENABLED_FEATURES = {
+          ...RECALL_CONFIG.ENABLED_FEATURES,
+          ...(runtimeConfig.frontend_features || {})
+        };
+        if (!localStorage.getItem('recall_max_tokens') && runtimeConfig?.default_generation?.max_new_tokens) {
+          RECALL_CONFIG.MAX_TOKENS = runtimeConfig.default_generation.max_new_tokens;
+        }
+        if (!localStorage.getItem('recall_temperature') && typeof runtimeConfig?.default_generation?.temperature === 'number') {
+          RECALL_CONFIG.TEMPERATURE = runtimeConfig.default_generation.temperature;
+        }
       }
-      if (!localStorage.getItem('recall_temperature') && typeof runtimeConfig?.default_generation?.temperature === 'number') {
-        RECALL_CONFIG.TEMPERATURE = runtimeConfig.default_generation.temperature;
-      }
+    } catch {
+      RECALL_CONFIG.API_ENDPOINT = apiUrl('/v1/chat/completions');
+    } finally {
+      updateFeatureVisibility();
       prefMaxTokens.value = RECALL_CONFIG.MAX_TOKENS;
       prefTemperature.value = RECALL_CONFIG.TEMPERATURE;
-    } catch {
-      RECALL_CONFIG.API_ENDPOINT = apiUrl('/api/chat/completions');
+      await refreshHealthStatus();
     }
   }
 
-  async function loadSavedApiKey() {
+  function loadSavedApiKey() {
+    if (!RECALL_CONFIG.ENABLED_FEATURES?.apiKeysEnabled) {
+      RECALL_CONFIG.API_KEY = '';
+      currentApiKeyId = '';
+      apiKeyDisplay.style.display = 'none';
+      revokeApiKeyBtn.style.display = 'none';
+      return;
+    }
+
     const savedKey = localStorage.getItem('recall_api_key');
-    if (savedKey && savedKey !== 'local-model') {
+    if (savedKey) {
       RECALL_CONFIG.API_KEY = savedKey;
       apiKeyValue.textContent = savedKey;
       apiKeyDisplay.style.display = 'block';
       revokeApiKeyBtn.style.display = 'inline-flex';
       generateApiKeyBtn.textContent = 'Regenerate API Key';
     }
-    try {
-      const response = await fetch(apiUrl('/api/keys'), { credentials: 'include' });
-      if (!response.ok) return;
-      const payload = await response.json();
-      const activeKey = (payload.data || []).find(key => !key.revoked_at) || null;
-      if (!activeKey) {
-        if (!savedKey || savedKey === 'local-model') {
-          apiKeyValue.textContent = '';
-          apiKeyDisplay.style.display = 'none';
-          revokeApiKeyBtn.style.display = 'none';
-          generateApiKeyBtn.textContent = 'Generate API Key';
-        }
-        currentApiKeyId = '';
-        localStorage.removeItem('recall_api_key_id');
-        return;
-      }
-      currentApiKeyId = activeKey.id;
-      localStorage.setItem('recall_api_key_id', currentApiKeyId);
-      if (!savedKey || savedKey === 'local-model') {
-        apiKeyValue.textContent = activeKey.key_prefix;
-        apiKeyDisplay.style.display = 'block';
-      }
-      revokeApiKeyBtn.style.display = 'inline-flex';
-      generateApiKeyBtn.textContent = 'Regenerate API Key';
-    } catch {}
   }
 
   async function handleGenerateApiKey() {
+    if (!RECALL_CONFIG.ENABLED_FEATURES?.apiKeysEnabled) {
+      appendSystemMessage('Developer API keys are disabled in this release of MedBrief AI.');
+      return;
+    }
+
     try {
       const response = await fetch(apiUrl('/api/keys'), {
         method: 'POST',
@@ -630,10 +855,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function handleRevokeApiKey() {
+    if (!RECALL_CONFIG.ENABLED_FEATURES?.apiKeysEnabled) {
+      appendSystemMessage('Developer API keys are disabled in this release of MedBrief AI.');
+      return;
+    }
+
     if (!currentApiKeyId) {
       localStorage.removeItem('recall_api_key');
       localStorage.removeItem('recall_api_key_id');
-      RECALL_CONFIG.API_KEY = 'local-model';
+      RECALL_CONFIG.API_KEY = '';
       apiKeyValue.textContent = '';
       apiKeyDisplay.style.display = 'none';
       revokeApiKeyBtn.style.display = 'none';
@@ -648,7 +878,7 @@ document.addEventListener('DOMContentLoaded', () => {
       currentApiKeyId = '';
       localStorage.removeItem('recall_api_key');
       localStorage.removeItem('recall_api_key_id');
-      RECALL_CONFIG.API_KEY = 'local-model';
+      RECALL_CONFIG.API_KEY = '';
       apiKeyValue.textContent = '';
       apiKeyDisplay.style.display = 'none';
       revokeApiKeyBtn.style.display = 'none';
@@ -670,6 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleClearMemory() {
     if (confirm('This will permanently delete all conversations, mood data, and saved themes. Continue?')) {
+      fetch(apiUrl(`/v1/user/${memory.getUserId()}`), { method: 'DELETE', credentials: 'include' }).catch(() => {});
       memory.clearAll();
       startNewConversation();
       populateSettingsPanel();
@@ -680,13 +911,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedTokens = localStorage.getItem('recall_max_tokens');
     const savedTemp = localStorage.getItem('recall_temperature');
     if (savedTokens) {
-      RECALL_CONFIG.MAX_TOKENS = parseInt(savedTokens);
-      prefMaxTokens.value = savedTokens;
+      const parsedTokens = parseInt(savedTokens, 10);
+      const clampedTokens = Number.isFinite(parsedTokens) ? Math.min(Math.max(parsedTokens, 32), 120) : RECALL_CONFIG.MAX_TOKENS;
+      RECALL_CONFIG.MAX_TOKENS = clampedTokens;
+      prefMaxTokens.value = clampedTokens;
+      localStorage.setItem('recall_max_tokens', String(clampedTokens));
     }
     if (savedTemp) {
-      RECALL_CONFIG.TEMPERATURE = parseFloat(savedTemp);
-      prefTemperature.value = savedTemp;
+      const parsedTemp = parseFloat(savedTemp);
+      const clampedTemp = Number.isFinite(parsedTemp) ? Math.min(Math.max(parsedTemp, 0), 0.4) : RECALL_CONFIG.TEMPERATURE;
+      RECALL_CONFIG.TEMPERATURE = clampedTemp;
+      prefTemperature.value = clampedTemp;
+      localStorage.setItem('recall_temperature', String(clampedTemp));
     }
+    prefTerminology.value = memory.profile?.preferences?.terminology || 'lay';
+    prefResponseLength.value = memory.profile?.preferences?.response_length || 'balanced';
+    prefTone.value = memory.profile?.preferences?.tone || 'supportive';
   }
 
   function generateSecureKey(length) {
@@ -706,6 +946,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return div.innerHTML;
   }
 
-  init();
-  messageInput.focus();
+  init().finally(() => {
+    messageInput.focus();
+  });
 });

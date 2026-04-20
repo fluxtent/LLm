@@ -1,0 +1,15 @@
+{
+  "apiBaseUrl": "http://127.0.0.1:8001",
+  "defaultModel": "medbrief-phi3-med",
+  "stream": true,
+  "enabledFeatures": {
+    "apiKeysEnabled": false,
+    "moodCheckEnabled": true,
+    "memoryInsightsEnabled": true,
+    "feedbackEnabled": true,
+    "profileEnabled": true,
+    "modeTooltipsEnabled": true
+  },
+  "maxTokensDefault": 220,
+  "temperatureDefault": 0.7
+}

@@ -1,12 +1,21 @@
-const MEDBRIEF_API_BASE = window.location.port === '8000' ? '' : 'http://127.0.0.1:8000';
+const MEDBRIEF_RUNTIME = window.MedBriefRuntime ? window.MedBriefRuntime.get() : {};
 
 const RECALL_CONFIG = {
-  API_KEY: localStorage.getItem('recall_api_key') || 'local-model',
-  API_ENDPOINT: `${MEDBRIEF_API_BASE}/api/chat/completions`,
-  MODEL: 'medbrief-ai',
-  MAX_TOKENS: 150,
-  TEMPERATURE: 0.8,
-  STREAM: false,
+  API_KEY: localStorage.getItem('recall_api_key') || '',
+  API_ENDPOINT: window.MedBriefRuntime ? window.MedBriefRuntime.apiUrl('/v1/chat/completions') : '/v1/chat/completions',
+  MODEL: MEDBRIEF_RUNTIME.defaultModel || 'medbrief-phi3-med',
+  MAX_TOKENS: MEDBRIEF_RUNTIME.maxTokensDefault || 220,
+  TEMPERATURE: MEDBRIEF_RUNTIME.temperatureDefault || 0.7,
+  STREAM: MEDBRIEF_RUNTIME.stream ?? true,
+  ENABLED_FEATURES: {
+    apiKeysEnabled: false,
+    moodCheckEnabled: true,
+    memoryInsightsEnabled: true,
+    feedbackEnabled: true,
+    profileEnabled: true,
+    modeTooltipsEnabled: true,
+    ...(MEDBRIEF_RUNTIME.enabledFeatures || {})
+  },
 
   MAX_CONTEXT_MESSAGES: 14,
   MEMORY_SUMMARY_THRESHOLD: 20,
@@ -103,7 +112,28 @@ SCOPE HONESTY:
     'self-harm', 'self harm', 'cutting myself', 'hurt myself',
     'don\'t want to be alive', 'no reason to live', 'better off dead',
     'can\'t go on', 'end it all', 'take my life', 'not worth living',
-    'going to hurt myself', 'plan to die', 'overdose'
+    'going to hurt myself', 'plan to die', 'overdose',
+    'don\'t know how to go on', 'dont know how to go on',
+    'i\'ve lost so much', 'ive lost so much', 'im hurting', 'i\'m hurting',
+    'no point in living', 'no point anymore', 'what\'s the point', 'what is the point',
+    'tired of everything', 'nothing matters', 'done fighting', 'i give up',
+    'can\'t do this anymore', 'cant do this anymore', 'nothing left',
+    'lost the will', 'so exhausted of living', 'lost everything', 'ive lost everything',
+    'lost my will', 'everyone would be better off', 'disappear', 'fade away', 'never wake up'
+  ],
+
+  CRISIS_HIGH_CONFIDENCE_KEYWORDS: [
+    'kill myself', 'want to die', 'end my life', 'suicide', 'suicidal',
+    'self-harm', 'self harm', 'hurt myself', 'better off dead',
+    'no reason to live', 'nothing to live for', 'can\'t go on',
+    'cannot go on', 'don\'t know how to go on', 'dont know how to go on',
+    'no point in living'
+  ],
+
+  CRISIS_DISTRESS_SIGNALS: [
+    'help', 'alone', 'hurting', 'hurt', 'hopeless', 'lost',
+    'can\'t', 'cant', 'done', 'exhausted', 'crying', 'panic',
+    'overwhelmed', 'scared', 'afraid'
   ],
 
   CRISIS_RESPONSE_ADDENDUM: `

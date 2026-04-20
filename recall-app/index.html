@@ -45,12 +45,12 @@
       <div class="sidebar-conversations" id="conversation-list"></div>
 
       <div class="sidebar-footer">
-        <button id="settings-btn" class="sidebar-footer-btn" title="Settings & Developer">
+        <button id="settings-btn" class="sidebar-footer-btn" title="Settings">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.4"/>
             <path d="M8 1.5V3.5M8 12.5V14.5M1.5 8H3.5M12.5 8H14.5M3.05 3.05L4.46 4.46M11.54 11.54L12.95 12.95M12.95 3.05L11.54 4.46M4.46 11.54L3.05 12.95" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
           </svg>
-          <span>Settings & API</span>
+          <span>Settings</span>
         </button>
         <button id="theme-toggle" class="sidebar-footer-btn" title="Toggle theme">
           <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -247,7 +247,7 @@
             <button class="modal-close" id="settings-close">&times;</button>
           </div>
           <div class="settings-body">
-            <div class="settings-section">
+            <div class="settings-section" id="developer-access-section">
               <div class="settings-section-header">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1L10 5H14L11 7.5L12 12L8 9.5L4 12L5 7.5L2 5H6L8 1Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <h3>Runtime Status</h3>
@@ -317,6 +317,41 @@
                   </div>
                   <input type="number" class="pref-input" id="pref-temperature" value="0.8" min="0" max="2" step="0.1" />
                 </div>
+                <div class="pref-divider"></div>
+                <div class="pref-row">
+                  <div class="pref-info">
+                    <span class="pref-name">Medical Terminology</span>
+                    <span class="pref-desc">Lay language or clinician-style wording</span>
+                  </div>
+                  <select class="pref-input" id="pref-terminology">
+                    <option value="lay">Lay</option>
+                    <option value="professional">Professional</option>
+                  </select>
+                </div>
+                <div class="pref-divider"></div>
+                <div class="pref-row">
+                  <div class="pref-info">
+                    <span class="pref-name">Response Length</span>
+                    <span class="pref-desc">How detailed MedBrief should usually be</span>
+                  </div>
+                  <select class="pref-input" id="pref-response-length">
+                    <option value="concise">Concise</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="detailed">Detailed</option>
+                  </select>
+                </div>
+                <div class="pref-divider"></div>
+                <div class="pref-row">
+                  <div class="pref-info">
+                    <span class="pref-name">Tone</span>
+                    <span class="pref-desc">Default communication style</span>
+                  </div>
+                  <select class="pref-input" id="pref-tone">
+                    <option value="supportive">Supportive</option>
+                    <option value="clinical">Clinical</option>
+                    <option value="direct">Direct</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -366,16 +401,17 @@
             </button>
           </div>
           <div class="composer-footer">
-            <span class="composer-note">MedBrief AI is not a doctor or therapist. For emergencies, call <a href="tel:988">988</a> or <a href="tel:911">911</a>.</span>
+            <span class="composer-note">MedBrief AI is for educational purposes only. Do not share personally identifying health information. For emergencies, call <a href="tel:988">988</a> or <a href="tel:911">911</a>.</span>
           </div>
         </div>
       </div>
     </main>
   </div>
 
-  <script src="config.js?v=4"></script>
-  <script src="memory.js?v=4"></script>
-  <script src="engine.js?v=4"></script>
-  <script src="app.js?v=4"></script>
+  <script src="runtime-config.js?v=7"></script>
+  <script src="config.js?v=7"></script>
+  <script src="memory.js?v=7"></script>
+  <script src="engine.js?v=7"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

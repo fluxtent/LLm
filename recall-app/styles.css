@@ -31,7 +31,6 @@
   --chat-max-width: 740px;
 }
 
-/* ─── Dark Theme ─── */
 [data-theme="dark"] {
   --bg-base: #0B0D1A;
   --bg-primary: #0E1025;
@@ -84,7 +83,6 @@
   --shadow-accent: 0 4px 20px rgba(127, 131, 255, 0.15);
 }
 
-/* ─── Light Theme ─── */
 [data-theme="light"] {
   --bg-base: #F5F5FF;
   --bg-primary: #FAFAFF;
@@ -137,7 +135,6 @@
   --shadow-accent: 0 4px 20px rgba(79, 70, 229, 0.1);
 }
 
-/* ─── Reset ─── */
 *,
 *::before,
 *::after {
@@ -209,7 +206,6 @@ code {
   font-size: 12px;
 }
 
-/* ─── App Shell ─── */
 #app {
   display: flex;
   height: 100vh;
@@ -218,7 +214,6 @@ code {
   position: relative;
 }
 
-/* ─── Background Decorations ─── */
 .bg-noise {
   position: fixed;
   inset: 0;
@@ -266,7 +261,6 @@ code {
   66% { transform: translate(-18px, 12px) scale(0.96); }
 }
 
-/* ─── Sidebar ─── */
 .sidebar {
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
@@ -434,7 +428,6 @@ code {
   color: var(--danger);
 }
 
-/* ─── Main Content ─── */
 .main-content {
   flex: 1;
   display: flex;
@@ -445,7 +438,6 @@ code {
   z-index: 1;
 }
 
-/* ─── Header ─── */
 .chat-header {
   height: var(--header-height);
   min-height: var(--header-height);
@@ -521,7 +513,6 @@ code {
   50% { opacity: 0.5; transform: scale(0.75); }
 }
 
-/* ─── Welcome Screen ─── */
 .welcome-screen {
   flex: 1;
   display: flex;
@@ -725,7 +716,6 @@ code {
   transform: translateX(0);
 }
 
-/* ─── Chat Messages ─── */
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -849,13 +839,39 @@ code {
   padding: 0 4px;
 }
 
+.message-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.feedback-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.feedback-btn:hover,
+.feedback-btn.active {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: rgba(127, 131, 255, 0.08);
+}
+
 .message-time {
   font-size: 10.5px;
   color: var(--text-tertiary);
   font-weight: 450;
 }
 
-/* ─── Typing Indicator ─── */
 .typing-indicator {
   display: flex;
   gap: 12px;
@@ -912,7 +928,6 @@ code {
   }
 }
 
-/* ─── Pattern Card ─── */
 .pattern-card {
   margin-top: 12px;
   padding: 14px 16px;
@@ -937,7 +952,6 @@ code {
   color: var(--text-secondary);
 }
 
-/* ─── Composer ─── */
 .composer-area {
   padding: 14px 24px 20px;
   background: transparent;
@@ -1028,7 +1042,6 @@ code {
   text-decoration: underline;
 }
 
-/* ─── Modals ─── */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1108,7 +1121,6 @@ code {
   margin-bottom: 24px;
 }
 
-/* ─── Mood Modal ─── */
 .mood-options {
   display: flex;
   gap: 10px;
@@ -1153,7 +1165,6 @@ code {
   color: var(--text-secondary);
 }
 
-/* ─── Crisis Modal ─── */
 .crisis-header-icon {
   font-size: 34px;
   margin-bottom: 12px;
@@ -1216,7 +1227,6 @@ code {
   line-height: 1.55;
 }
 
-/* ─── Settings Modal ─── */
 .settings-panel {
   background: var(--bg-secondary);
   border: 1px solid var(--border-default);
@@ -1510,7 +1520,6 @@ code {
   justify-content: flex-end;
 }
 
-/* ─── Session Divider ─── */
 .session-divider {
   display: flex;
   align-items: center;
@@ -1533,7 +1542,39 @@ code {
   white-space: nowrap;
 }
 
-/* ─── Streak Container ─── */
+.request-error {
+  align-self: center;
+  width: min(100%, 720px);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245,158,11,0.28);
+  background: rgba(245,158,11,0.08);
+  padding: 14px 16px;
+  animation: messageIn 0.3s var(--ease-out);
+}
+
+.request-error-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.request-error-copy strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.request-error-copy span {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.retry-btn[disabled] {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .streak-container {
   margin-top: 10px;
   padding: 10px 14px;
@@ -1547,7 +1588,6 @@ code {
   gap: 7px;
 }
 
-/* ─── Safety Banner ─── */
 .safety-banner {
   padding: 14px 16px;
   border-radius: var(--radius-md);
@@ -1566,7 +1606,6 @@ code {
   text-decoration: underline;
 }
 
-/* ─── Insight Label ─── */
 .message-content .insight-label {
   display: inline-flex;
   align-items: center;
@@ -1579,7 +1618,6 @@ code {
   margin-bottom: 7px;
 }
 
-/* ─── Responsive ─── */
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
