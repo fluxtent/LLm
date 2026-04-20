@@ -46,7 +46,7 @@ class Settings:
     default_top_p: float = float(os.getenv("MEDBRIEF_DEFAULT_TOP_P", "0.85"))
     stream_default: bool = _bool_env("MEDBRIEF_STREAM_DEFAULT", True)
     gpu_type: str = os.getenv("MEDBRIEF_GPU_TYPE", "L4")
-    runtime_config_api_base: str = os.getenv("MEDBRIEF_RUNTIME_API_BASE", "http://127.0.0.1:8001")
+    runtime_config_api_base: str = os.getenv("MEDBRIEF_RUNTIME_API_BASE", "")
     allowed_origins: tuple[str, ...] = _list_env(
         "MEDBRIEF_ALLOWED_ORIGINS",
         (
@@ -61,8 +61,8 @@ class Settings:
 
     @property
     def active_engine(self) -> str:
-        if self.inference_engine:
-            return self.inference_engine
+        if self.inference_engine.strip():
+            return self.inference_engine.strip()
         if self.vllm_base_url:
             return "vllm"
         return "ollama"
