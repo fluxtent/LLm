@@ -711,6 +711,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function populateSettingsPanel() {
     $('runtime-model').textContent = runtimeConfig?.active_model || runtimeConfig?.model_id || RECALL_CONFIG.MODEL || '—';
+    if (runtimeConfig?.engine) {
+      $('runtime-model').textContent += ` (${runtimeConfig.engine})`;
+    }
     $('runtime-endpoint').textContent = apiUrl('/v1/chat/completions');
     $('runtime-stream').textContent = RECALL_CONFIG.STREAM ? 'Enabled' : 'Disabled';
     $('runtime-temp').textContent = RECALL_CONFIG.TEMPERATURE || '—';
@@ -912,14 +915,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedTemp = localStorage.getItem('recall_temperature');
     if (savedTokens) {
       const parsedTokens = parseInt(savedTokens, 10);
-      const clampedTokens = Number.isFinite(parsedTokens) ? Math.min(Math.max(parsedTokens, 32), 120) : RECALL_CONFIG.MAX_TOKENS;
+      const clampedTokens = Number.isFinite(parsedTokens) ? Math.min(Math.max(parsedTokens, 32), 2000) : RECALL_CONFIG.MAX_TOKENS;
       RECALL_CONFIG.MAX_TOKENS = clampedTokens;
       prefMaxTokens.value = clampedTokens;
       localStorage.setItem('recall_max_tokens', String(clampedTokens));
     }
     if (savedTemp) {
       const parsedTemp = parseFloat(savedTemp);
-      const clampedTemp = Number.isFinite(parsedTemp) ? Math.min(Math.max(parsedTemp, 0), 0.4) : RECALL_CONFIG.TEMPERATURE;
+      const clampedTemp = Number.isFinite(parsedTemp) ? Math.min(Math.max(parsedTemp, 0), 2) : RECALL_CONFIG.TEMPERATURE;
       RECALL_CONFIG.TEMPERATURE = clampedTemp;
       prefTemperature.value = clampedTemp;
       localStorage.setItem('recall_temperature', String(clampedTemp));

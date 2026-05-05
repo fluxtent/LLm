@@ -1,0 +1,13 @@
+{
+  "raw_documents": 501,
+  "deduplicated_documents": 276,
+  "filtered_documents": 276,
+  "train_documents": 262,
+  "val_documents": 14,
+  "domain_counts": {
+    "qa": 141,
+    "psych": 78,
+    "health": 57
+  },
+  "vocab_size": 5082
+}

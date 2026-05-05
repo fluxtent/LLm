@@ -3,13 +3,13 @@
   "defaultModel": "medbrief-phi3-med",
   "stream": true,
   "enabledFeatures": {
-    "apiKeysEnabled": false,
+    "apiKeysEnabled": true,
     "moodCheckEnabled": true,
     "memoryInsightsEnabled": true,
     "feedbackEnabled": true,
     "profileEnabled": true,
     "modeTooltipsEnabled": true
   },
-  "maxTokensDefault": 220,
-  "temperatureDefault": 0.7
+  "maxTokensDefault": 500,
+  "temperatureDefault": 0.65
 }

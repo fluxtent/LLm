@@ -8,7 +8,7 @@ const RECALL_CONFIG = {
   TEMPERATURE: MEDBRIEF_RUNTIME.temperatureDefault || 0.7,
   STREAM: MEDBRIEF_RUNTIME.stream ?? true,
   ENABLED_FEATURES: {
-    apiKeysEnabled: false,
+    apiKeysEnabled: true,
     moodCheckEnabled: true,
     memoryInsightsEnabled: true,
     feedbackEnabled: true,
@@ -17,8 +17,8 @@ const RECALL_CONFIG = {
     ...(MEDBRIEF_RUNTIME.enabledFeatures || {})
   },
 
-  MAX_CONTEXT_MESSAGES: 14,
-  MEMORY_SUMMARY_THRESHOLD: 20,
+  MAX_CONTEXT_MESSAGES: 24,
+  MEMORY_SUMMARY_THRESHOLD: 12,
 
   SYSTEM_PROMPT: `You are MedBrief AI, a premium multi-domain AI assistant built for a healthcare and innovation portfolio. You are calm, intelligent, emotionally perceptive, broadly capable, and deeply specialized in psychology and mental wellness.
 

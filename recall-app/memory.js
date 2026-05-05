@@ -176,7 +176,7 @@ class RecallMemory {
 
   detectMode(text) {
     const lower = (text || '').toLowerCase();
-    const psychKeywords = ['anxious', 'depressed', 'feeling', 'overwhelmed', 'struggling', 'therapist', 'panic', 'burnout', 'lonely', 'hurt', 'hurting', 'grief', 'lost'];
+    const psychKeywords = ['anxious', 'depressed', 'feeling', 'overwhelmed', 'struggling', 'therapist', 'panic', 'burnout', 'lonely', 'hurt', 'hurting', 'grief', 'lost', 'failure', 'failed', 'can\'t think', 'cant think', 'all over', 'hopeless', 'worthless', 'ruined'];
     const healthKeywords = ['symptom', 'medication', 'diagnosis', 'doctor', 'pain', 'condition', 'treatment', 'hospital', 'medical', 'health', 'headache', 'sleep'];
     const portfolioKeywords = ['medbrief', 'portfolio', 'project', 'website', 'product', 'feature'];
 

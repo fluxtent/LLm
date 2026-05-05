@@ -82,12 +82,12 @@ def detect_mode(text: str) -> ModeLiteral:
 def _reduce_history(messages: list[dict[str, str]], mode: ModeLiteral = "general") -> list[dict[str, str]]:
     conversational = [message for message in messages if message["role"] in {"user", "assistant"}]
     keep = {
-        "crisis": 8,
-        "psych": 6,
-        "health": 2,
-        "portfolio": 4,
-        "general": 4,
-    }.get(mode, 4)
+        "crisis": 10,
+        "psych": 14,
+        "health": 8,
+        "portfolio": 10,
+        "general": 12,
+    }.get(mode, 12)
     if len(conversational) <= keep:
         return conversational
     return conversational[-keep:]
@@ -143,7 +143,7 @@ def _sanitize_memory_summary(summary: str) -> str:
     lowered = cleaned.lower()
     if any(pattern in lowered for pattern in MEMORY_SUMMARY_BLOCKLIST):
         return "[Memory summary removed due to content policy]"
-    return cleaned[:240]
+    return cleaned[:800]
 
 
 def _truncate_history(messages: list[dict[str, str]], max_prompt_tokens: int) -> list[dict[str, str]]:
@@ -239,7 +239,7 @@ def build_prompt_bundle(request: ChatCompletionRequest) -> PromptBundle:
             ontology_bits.append(f"Procedures mentioned: {', '.join(medical_context.procedures[:3])}")
         if ontology_bits:
             upstream_messages.append({"role": "system", "content": " ".join(ontology_bits)})
-    upstream_messages.extend(_truncate_history(conversational, max_prompt_tokens=280))
+    upstream_messages.extend(_truncate_history(conversational, max_prompt_tokens=1800))
 
     return PromptBundle(
         mode=mode,

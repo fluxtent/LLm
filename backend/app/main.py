@@ -17,22 +17,31 @@ from fastapi.staticfiles import StaticFiles
 
 from .constants import FRONTEND_FEATURE_FLAGS, PRIVACY_DISCLAIMER, SUPPORTED_MODES
 from .inference import BaseInferenceEngine, MockInferenceEngine, create_inference_engine
+from .personalization import (
+    apply_memory_updates,
+    build_personalization_context,
+    build_response_plan,
+    evaluate_response_quality,
+)
 from .profile_store import STORE
 from .prompting import PromptBundle, build_prompt_bundle, is_definition_request
 from .safety import (
-    apply_profanity_filter,
     clean_response_text,
     degraded_mode_response,
     ensure_crisis_resources,
     evaluate_request,
-    fallback_response,
     inject_privacy_disclaimer,
     is_low_quality_response,
     postprocess_health_response,
 )
 from .schemas import (
+    ApiKeyCreateRequest,
+    ApiKeyCreateResponse,
+    ApiKeyListResponse,
+    ApiKeyRevokeResponse,
     BackendConfigResponse,
     ChatCompletionRequest,
+    ChatMessage,
     DeleteUserResponse,
     FeedbackRequest,
     FeedbackResponse,
@@ -92,12 +101,8 @@ def _build_chat_response(
 
 
 def _make_cache_key(request: ChatCompletionRequest, prompt_bundle: PromptBundle) -> str | None:
-    user_id = request.metadata.get("user_id")
-    if request.memory_summary or user_id or request.conversation_id:
-        return None
-    if prompt_bundle.mode not in {"general", "health", "portfolio"}:
-        return None
-    return f"{prompt_bundle.mode}::{prompt_bundle.latest_user_text.strip().lower()}::{request.max_tokens}"
+    del request, prompt_bundle
+    return None
 
 
 def _get_cached_completion(cache_key: str) -> tuple[dict[str, object], str] | None:
@@ -117,16 +122,37 @@ def _store_cached_completion(cache_key: str | None, response_body: dict[str, obj
     GENERIC_CACHE[cache_key] = (time.time(), response_body, cleaned_text)
 
 
+def _quality_retry_prompt(response_plan, flags: list[str]) -> str:
+    flag_text = ", ".join(flags) if flags else "low_quality_response"
+    return (
+        "The previous draft failed MedBrief's response-quality gate "
+        f"({flag_text}). Rewrite from scratch. Answer the user's latest message directly, "
+        "use the current chat context, and do not mention this instruction, the plan, the gate, "
+        "or any analysis labels. Do not mirror the user's words back as a formula. "
+        f"Required focus: {'; '.join(response_plan.must_address[:4])}. "
+        f"Tone: {response_plan.tone}."
+    )
+
+
 def _summarize_messages(messages: list[dict[str, str]]) -> str:
     users = [message["content"] for message in messages if message["role"] == "user"]
     assistants = [message["content"] for message in messages if message["role"] == "assistant"]
-    first_issue = users[0] if users else "the user's concerns"
-    latest_issue = users[-1] if users else "their main question"
-    helpful = assistants[-1] if assistants else "general support and guidance"
-    sentence_one = f"The user was primarily dealing with {first_issue[:180].rstrip('.!?')}."
-    sentence_two = f"What seemed most helpful was {helpful[:180].rstrip('.!?')}."
-    sentence_three = f"A reasonable follow-up is to revisit {latest_issue[:180].rstrip('.!?')} with any new details or changes."
-    return " ".join([sentence_one, sentence_two, sentence_three])
+
+    def clip(text: str, limit: int = 180) -> str:
+        cleaned = " ".join(text.split()).strip()
+        return cleaned[:limit].rstrip(" ,.;:!?")
+
+    recent_user_threads = [clip(message, 140) for message in users[-4:] if clip(message, 140)]
+    latest_issue = clip(users[-1]) if users else "the user's latest question"
+    helpful_response = clip(assistants[-1]) if assistants else "direct, contextual support"
+    recurring = "; ".join(recent_user_threads) if recent_user_threads else "no stable recurring theme yet"
+
+    return (
+        f"Memory snapshot: recent user themes include {recurring}. "
+        f"Current thread to continue from: {latest_issue}. "
+        f"Last assistant direction: {helpful_response}. "
+        "Use this only when it helps continuity; do not claim details the user did not provide."
+    )
 
 
 async def _stream_sanitized_text(
@@ -175,6 +201,42 @@ def _rate_limit_or_raise(request: Request, bucket: str, limit: int, window_secon
     RATE_LIMIT_BUCKETS[key].append(now)
 
 
+def _extract_bearer_token(request: Request) -> str | None:
+    authorization = request.headers.get("authorization", "").strip()
+    if not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization[7:].strip()
+    return token or None
+
+
+def _validate_optional_api_key(request: Request, settings: Settings) -> dict[str, object] | None:
+    token = _extract_bearer_token(request)
+    if token:
+        record = STORE.authenticate_api_key(token)
+        if record is None:
+            raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+        request.state.api_key_id = record["id"]
+        return record
+    if settings.require_api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+    return None
+
+
+def _allow_api_key_management_or_raise(request: Request, settings: Settings) -> None:
+    if not settings.api_keys_enabled:
+        raise HTTPException(status_code=404, detail="API key generation is disabled")
+
+    admin_header = request.headers.get("x-medbrief-admin-token", "").strip()
+    bearer = _extract_bearer_token(request)
+    if settings.admin_token and (admin_header == settings.admin_token or bearer == settings.admin_token):
+        return
+
+    if settings.allow_public_key_generation:
+        return
+
+    raise HTTPException(status_code=403, detail="Admin token required to manage API keys")
+
+
 def _profile_from_request(request: ChatCompletionRequest) -> UserProfile | None:
     raw_profile = request.metadata.get("user_profile")
     if isinstance(raw_profile, dict) and raw_profile.get("user_id"):
@@ -197,15 +259,15 @@ def _resolve_generation_settings(
     top_p = request.top_p
 
     if is_definition_request(prompt_bundle.latest_user_text):
-        return min(max_tokens, 64), min(temperature, 0.18), min(top_p, 0.78)
+        return min(max_tokens, 260), min(temperature, 0.35), min(top_p, 0.9)
     if prompt_bundle.mode == "health":
-        return min(max_tokens, 72), min(temperature, 0.18), min(top_p, 0.8)
+        return min(max_tokens, 520), min(temperature, 0.45), min(top_p, 0.9)
     if prompt_bundle.mode == "psych":
-        return min(max_tokens, 64), min(temperature, 0.22), min(top_p, 0.82)
+        return min(max_tokens, 520), min(temperature, 0.65), min(top_p, 0.92)
     if prompt_bundle.mode == "general":
-        return min(max_tokens, 72), min(temperature, 0.22), min(top_p, 0.8)
+        return min(max_tokens, 640), min(temperature, 0.7), min(top_p, 0.94)
     if prompt_bundle.mode == "portfolio":
-        return min(max_tokens, 88), min(temperature, 0.18), min(top_p, 0.8)
+        return min(max_tokens, 560), min(temperature, 0.55), min(top_p, 0.92)
     return max_tokens, temperature, top_p
 
 
@@ -218,6 +280,13 @@ async def _generate_completion(
 ) -> tuple[dict[str, object], dict[str, object], str]:
     request_id = request.request_id or str(uuid.uuid4())
     profile = _profile_from_request(request)
+    if profile is not None and "user_profile" not in request.metadata:
+        request.metadata["user_profile"] = profile.model_dump()
+    personalization_context = build_personalization_context(request, profile)
+    response_plan = build_response_plan(personalization_context, requested_mode=request.mode)
+    if request.mode is None:
+        request.mode = response_plan.mode
+    request.messages.insert(0, ChatMessage(role="system", content=response_plan.to_system_prompt()))
     prompt_bundle: PromptBundle = build_prompt_bundle(request)
     prompt_tokens = sum(_count_tokens_rough(message["content"]) for message in prompt_bundle.upstream_messages)
     max_tokens, temperature, top_p = _resolve_generation_settings(request, prompt_bundle)
@@ -292,15 +361,57 @@ async def _generate_completion(
         finish_reason = "stop"
 
     cleaned = clean_response_text(response_text)
-    cleaned = apply_profanity_filter(cleaned)
     if prompt_bundle.mode == "health":
         cleaned, medical_guard_hit = postprocess_health_response(cleaned)
         fallback_used = fallback_used or medical_guard_hit
     if prompt_bundle.mode == "crisis":
         cleaned = ensure_crisis_resources(cleaned)
-    if is_low_quality_response(cleaned):
-        cleaned = fallback_response()
+    response_quality = evaluate_response_quality(cleaned, response_plan)
+    needs_quality_retry = safety_decision.allow_model and (
+        is_low_quality_response(cleaned) or response_quality.should_override
+    )
+    if needs_quality_retry:
         fallback_used = True
+        try:
+            retry_inference = await engine.complete(
+                messages=[
+                    {"role": "system", "content": _quality_retry_prompt(response_plan, response_quality.flags)}
+                ]
+                + prompt_bundle.upstream_messages,
+                model=request.model or settings.public_model_id,
+                max_tokens=max_tokens,
+                temperature=max(temperature, 0.55),
+                top_p=top_p,
+                request_id=f"{request_id}-quality-retry",
+                mode=prompt_bundle.mode,
+                conversation_id=request.conversation_id,
+                profile=profile,
+            )
+            retry_cleaned = clean_response_text(retry_inference.text)
+            if prompt_bundle.mode == "health":
+                retry_cleaned, medical_guard_hit = postprocess_health_response(retry_cleaned)
+                fallback_used = fallback_used or medical_guard_hit
+            if prompt_bundle.mode == "crisis":
+                retry_cleaned = ensure_crisis_resources(retry_cleaned)
+            retry_quality = evaluate_response_quality(retry_cleaned, response_plan)
+            if not is_low_quality_response(retry_cleaned) and not retry_quality.should_override:
+                cleaned = retry_cleaned
+                response_quality = retry_quality
+                upstream_model = retry_inference.upstream_model or upstream_model
+                finish_reason = retry_inference.finish_reason
+            else:
+                cleaned = degraded_mode_response()
+                response_quality = retry_quality
+        except Exception:
+            cleaned = degraded_mode_response()
+    cleaned = clean_response_text(cleaned)
+
+    user_id = request.metadata.get("user_id")
+    memory_profile = profile
+    if memory_profile is None and isinstance(user_id, str) and user_id:
+        memory_profile = UserProfile(user_id=user_id)
+    if memory_profile is not None and memory_profile.preferences.memory_enabled:
+        STORE.upsert_profile(apply_memory_updates(memory_profile, response_plan.understanding))
 
     response_body = _build_chat_response(
         response_text=cleaned,
@@ -323,6 +434,9 @@ async def _generate_completion(
         "user_id": request.metadata.get("user_id"),
         "conversation_id": request.conversation_id,
         "client": http_request.client.host if http_request.client else None,
+        "personalization_flags": response_quality.flags,
+        "personalization_intent": response_plan.understanding.user_intent,
+        "personalization_emotion": response_plan.understanding.emotional_state,
     }
     _store_cached_completion(cache_key, response_body, cleaned)
     return response_body, telemetry, cleaned
@@ -335,7 +449,7 @@ def create_app() -> FastAPI:
         if errors:
             raise RuntimeError("Production config errors: " + "; ".join(errors))
     engine = create_inference_engine(settings)
-    fallback_engine: BaseInferenceEngine | None = None if settings.active_engine == "mock" else MockInferenceEngine()
+    fallback_engine: BaseInferenceEngine | None = None
 
     app = FastAPI(title=settings.api_title, version=settings.release_version)
     app.add_middleware(
@@ -349,6 +463,8 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def warm_runtime_model() -> None:
         if settings.active_engine == "ollama" and settings.ollama_warmup:
+            await engine.warmup()
+        elif settings.active_engine == "custom":
             await engine.warmup()
 
     @app.get("/health", response_model=HealthResponse)
@@ -372,6 +488,7 @@ def create_app() -> FastAPI:
             model_id=settings.runtime_model_id,
             active_model=settings.runtime_model_id,
             adapter_id=settings.adapter_id or None,
+            engine=settings.active_engine,
             stream_default=settings.stream_default,
             max_tokens_default=settings.default_max_tokens,
             temperature_default=settings.default_temperature,
@@ -438,18 +555,45 @@ def create_app() -> FastAPI:
                 "feedback": "/v1/feedback",
                 "memory_summarize": "/v1/memory/summarize",
                 "session_init": "/v1/session/init",
+                "api_keys": "/api/keys",
             },
         }
+
+    @app.post("/api/keys", response_model=ApiKeyCreateResponse)
+    async def create_api_key(payload: ApiKeyCreateRequest, request: Request) -> ApiKeyCreateResponse:
+        _rate_limit_or_raise(request, "api_keys", limit=10, window_seconds=60)
+        _allow_api_key_management_or_raise(request, settings)
+        api_key, record = STORE.create_api_key(payload.label)
+        emit_event("api_key_created", key_id=record["id"], label=record["label"])
+        return ApiKeyCreateResponse(api_key=api_key, record=record)
+
+    @app.get("/api/keys", response_model=ApiKeyListResponse)
+    async def list_api_keys(request: Request) -> ApiKeyListResponse:
+        _rate_limit_or_raise(request, "api_keys", limit=60, window_seconds=60)
+        _allow_api_key_management_or_raise(request, settings)
+        return ApiKeyListResponse(data=STORE.list_api_keys(include_revoked=True))
+
+    @app.delete("/api/keys/{key_id}", response_model=ApiKeyRevokeResponse)
+    async def revoke_api_key(key_id: str, request: Request) -> ApiKeyRevokeResponse:
+        _rate_limit_or_raise(request, "api_keys", limit=30, window_seconds=60)
+        _allow_api_key_management_or_raise(request, settings)
+        record = STORE.revoke_api_key(key_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="API key not found")
+        emit_event("api_key_revoked", key_id=key_id)
+        return ApiKeyRevokeResponse(revoked=True, record=record)
 
     @app.post("/v1/profile", response_model=UserProfileResponse)
     async def upsert_profile(profile_request: UserProfileUpsertRequest, request: Request) -> UserProfileResponse:
         _rate_limit_or_raise(request, "profile", limit=60, window_seconds=60)
+        _validate_optional_api_key(request, settings)
         stored = STORE.upsert_profile(profile_request.profile)
         emit_event("profile_upsert", user_id=stored.user_id)
         return UserProfileResponse(user_id=stored.user_id, profile=stored)
 
     @app.get("/v1/profile/{user_id}", response_model=UserProfileResponse)
-    async def get_profile(user_id: str) -> UserProfileResponse:
+    async def get_profile(user_id: str, request: Request) -> UserProfileResponse:
+        _validate_optional_api_key(request, settings)
         profile = STORE.get_profile(user_id)
         if profile is None:
             raise HTTPException(status_code=404, detail="Profile not found")
@@ -458,6 +602,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/memory/summarize", response_model=MemorySummarizeResponse)
     async def summarize_memory(payload: MemorySummarizeRequest, request: Request) -> MemorySummarizeResponse:
         _rate_limit_or_raise(request, "summarize", limit=30, window_seconds=60)
+        _validate_optional_api_key(request, settings)
         summary = _summarize_messages([message.model_dump() for message in payload.messages])
         stored = False
         if payload.user_id and payload.session_id:
@@ -467,7 +612,8 @@ def create_app() -> FastAPI:
         return MemorySummarizeResponse(summary=summary, stored=stored)
 
     @app.post("/v1/session/init", response_model=SessionInitResponse)
-    async def session_init(payload: SessionInitRequest) -> SessionInitResponse:
+    async def session_init(payload: SessionInitRequest, request: Request) -> SessionInitResponse:
+        _validate_optional_api_key(request, settings)
         profile = STORE.get_profile(payload.user_id)
         summary = STORE.latest_summary(payload.user_id)
         return SessionInitResponse(session_id=payload.session_id, memory_summary=summary, profile=profile)
@@ -475,12 +621,14 @@ def create_app() -> FastAPI:
     @app.post("/v1/feedback", response_model=FeedbackResponse)
     async def feedback(payload: FeedbackRequest, request: Request) -> FeedbackResponse:
         _rate_limit_or_raise(request, "feedback", limit=120, window_seconds=60)
+        _validate_optional_api_key(request, settings)
         count = STORE.add_feedback(payload)
         emit_event("feedback_received", user_id=payload.user_id, rating=payload.rating, mode=payload.mode)
         return FeedbackResponse(stored=True, feedback_count=count)
 
     @app.delete("/v1/user/{user_id}", response_model=DeleteUserResponse)
-    async def delete_user(user_id: str) -> DeleteUserResponse:
+    async def delete_user(user_id: str, request: Request) -> DeleteUserResponse:
+        _validate_optional_api_key(request, settings)
         STORE.delete_user(user_id)
         emit_event("user_deleted", user_id=user_id)
         return DeleteUserResponse(user_id=user_id, deleted=True)
@@ -488,6 +636,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/chat/completions")
     async def chat_completions(request: ChatCompletionRequest, http_request: Request) -> Response:
         _rate_limit_or_raise(http_request, "chat", limit=30, window_seconds=60)
+        _validate_optional_api_key(http_request, settings)
         try:
             response_body, telemetry, sanitized_text = await _generate_completion(
                 http_request,

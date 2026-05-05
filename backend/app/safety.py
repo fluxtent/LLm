@@ -111,6 +111,10 @@ def is_low_quality_response(text: str) -> bool:
     if len(words) < 12:
         return True
     lowered = text.lower()
+    if lowered.endswith((" that", " that is", " that is how", " because", " and", " but", " or", " to", " the")):
+        return True
+    if text.endswith(('"', "'", ",", ";", ":")):
+        return True
     if any(marker in lowered for marker in ("http://", "https://", "www.", "%20", "[assistant]", "[user]", "[mode:")):
         return True
     if any(marker in lowered for marker in ARTIFACT_MARKERS):

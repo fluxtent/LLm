@@ -129,6 +129,34 @@ class DeleteUserResponse(BaseModel):
     deleted: bool = True
 
 
+class ApiKeyCreateRequest(BaseModel):
+    label: str = Field(default="MedBrief API key", max_length=80)
+
+
+class ApiKeyRecordPublic(BaseModel):
+    id: str
+    label: str
+    prefix: str
+    created_at: int
+    last_used_at: int | None = None
+    revoked_at: int | None = None
+    usage_count: int = 0
+
+
+class ApiKeyCreateResponse(BaseModel):
+    api_key: str
+    record: ApiKeyRecordPublic
+
+
+class ApiKeyListResponse(BaseModel):
+    data: list[ApiKeyRecordPublic]
+
+
+class ApiKeyRevokeResponse(BaseModel):
+    revoked: bool
+    record: ApiKeyRecordPublic | None = None
+
+
 class RuntimeConfigResponse(BaseModel):
     apiBaseUrl: str
     defaultModel: str
@@ -142,6 +170,7 @@ class BackendConfigResponse(BaseModel):
     model_id: str
     active_model: str
     adapter_id: str | None
+    engine: str
     stream_default: bool
     max_tokens_default: int
     temperature_default: float

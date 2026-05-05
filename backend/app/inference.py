@@ -1,12 +1,14 @@
-"""Inference engine adapters for Ollama, vLLM, and local fallback templates."""
+"""Inference engine adapters for the custom MedBrief model and optional provider backends."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import hmac
+import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -92,6 +94,121 @@ class MockInferenceEngine(BaseInferenceEngine):
         )
 
 
+class CustomMedBriefEngine(BaseInferenceEngine):
+    name = "custom"
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        self._runtime: dict[str, Any] | None = None
+        self._runtime_error: Exception | None = None
+        self._lock = threading.Lock()
+
+    def _load_runtime(self) -> dict[str, Any]:
+        if self._runtime is not None:
+            return self._runtime
+        if self._runtime_error is not None:
+            raise RuntimeError("custom MedBrief runtime failed to load") from self._runtime_error
+
+        with self._lock:
+            if self._runtime is not None:
+                return self._runtime
+            try:
+                from generate import load_runtime
+
+                runtime = load_runtime(
+                    model_path=self._settings.custom_model_path,
+                    vocab_path=self._settings.custom_vocab_path,
+                    merges_path=self._settings.custom_merges_path,
+                )
+                if self._settings.custom_allow_cpu and runtime.get("release_ready") and runtime.get("model_loaded"):
+                    runtime["serve_model"] = True
+                    runtime["serve_strategy"] = "model"
+                self._runtime = runtime
+                return runtime
+            except Exception as exc:
+                self._runtime_error = exc
+                raise
+
+    def _complete_sync(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        request_id: str,
+        mode: str,
+        conversation_id: str | None,
+        profile: UserProfile | None,
+    ) -> InferenceResult:
+        del request_id, conversation_id, profile
+        from generate import MODE_PARAMETERS, generate_response
+
+        runtime = self._load_runtime()
+        params = {**MODE_PARAMETERS["general"], **MODE_PARAMETERS.get(mode, {})}
+        started = time.perf_counter()
+        with self._lock:
+            text = generate_response(
+                runtime,
+                messages,
+                mode=mode,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_k=params["top_k"],
+                top_p=top_p,
+                repetition_penalty=params["repetition_penalty"],
+                allow_heuristic=False,
+            )
+        return InferenceResult(
+            text=text,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            upstream_model=self._settings.public_model_id,
+        )
+
+    async def complete(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        request_id: str,
+        mode: str,
+        conversation_id: str | None = None,
+        profile: UserProfile | None = None,
+    ) -> InferenceResult:
+        del model
+        return await asyncio.to_thread(
+            self._complete_sync,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            request_id=request_id,
+            mode=mode,
+            conversation_id=conversation_id,
+            profile=profile,
+        )
+
+    async def health(self) -> bool:
+        try:
+            runtime = await asyncio.to_thread(self._load_runtime)
+            return bool(
+                runtime.get("model_loaded")
+                and runtime.get("tokenizer") is not None
+                and runtime.get("release_ready")
+            )
+        except Exception:
+            return False
+
+    async def warmup(self) -> None:
+        try:
+            await asyncio.to_thread(self._load_runtime)
+        except Exception:
+            return None
+
+
 class OllamaChatEngine(BaseInferenceEngine):
     name = "ollama"
 
@@ -102,6 +219,7 @@ class OllamaChatEngine(BaseInferenceEngine):
         self._timeout = settings.ollama_timeout_seconds
         self._keep_alive = settings.ollama_keep_alive
         self._num_ctx = settings.ollama_num_ctx
+        self._num_thread = settings.ollama_num_thread
 
     def _resolve_model(self, requested_model: str | None) -> str:
         if not requested_model or requested_model == self._public_model_id:
@@ -127,6 +245,7 @@ class OllamaChatEngine(BaseInferenceEngine):
                 "temperature": temperature,
                 "top_p": top_p,
                 "num_ctx": self._num_ctx,
+                "num_thread": self._num_thread,
             },
         }
 
@@ -200,6 +319,82 @@ class OllamaChatEngine(BaseInferenceEngine):
             )
         except Exception:
             return None
+
+
+class OpenAIChatEngine(BaseInferenceEngine):
+    name = "openai"
+
+    def __init__(self, settings: Settings):
+        self._base_url = settings.openai_base_url.rstrip("/")
+        self._api_key = settings.openai_api_key
+        self._default_model = settings.openai_model
+        self._public_model_id = settings.public_model_id
+        self._timeout = settings.request_timeout_seconds
+
+    def _resolve_model(self, requested_model: str | None) -> str:
+        if not requested_model or requested_model == self._public_model_id:
+            return self._default_model
+        return requested_model
+
+    def _headers(self, request_id: str) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self._api_key}",
+            "X-Request-ID": request_id,
+        }
+
+    async def complete(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        request_id: str,
+        mode: str,
+        conversation_id: str | None = None,
+        profile: UserProfile | None = None,
+    ) -> InferenceResult:
+        del mode, conversation_id, profile
+        started = time.perf_counter()
+        requested_model = self._resolve_model(model)
+        payload = {
+            "model": requested_model,
+            "messages": messages,
+            "max_completion_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                f"{self._base_url}/v1/chat/completions",
+                headers=self._headers(request_id),
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        return InferenceResult(
+            text=content,
+            finish_reason=data["choices"][0].get("finish_reason", "stop"),
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            upstream_model=data.get("model", requested_model),
+        )
+
+    async def health(self) -> bool:
+        if not self._api_key:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"{self._base_url}/v1/models",
+                    headers=self._headers("health-check"),
+                )
+            return response.is_success
+        except httpx.HTTPError:
+            return False
 
 
 class VLLMChatEngine(BaseInferenceEngine):
@@ -292,6 +487,10 @@ class VLLMChatEngine(BaseInferenceEngine):
 
 
 def create_inference_engine(settings: Settings) -> BaseInferenceEngine:
+    if settings.active_engine == "custom":
+        return CustomMedBriefEngine(settings)
+    if settings.active_engine == "openai":
+        return OpenAIChatEngine(settings)
     if settings.active_engine == "ollama":
         return OllamaChatEngine(settings)
     if settings.active_engine == "vllm":

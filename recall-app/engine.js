@@ -66,7 +66,7 @@ class RecallEngine {
   detectMode(text) {
     const lower = text.toLowerCase();
     
-    const psychKeywords = ['anxious', 'depressed', 'feeling', 'overwhelmed', 'struggling', 'therapist', 'panic', 'mental', 'emotional', 'burnout', 'lonely', 'ashamed', 'hurt', 'hurting', 'grief', 'lost'];
+    const psychKeywords = ['anxious', 'depressed', 'feeling', 'overwhelmed', 'struggling', 'therapist', 'panic', 'mental', 'emotional', 'burnout', 'lonely', 'ashamed', 'hurt', 'hurting', 'grief', 'lost', 'failure', 'failed', 'can\'t think', 'cant think', 'all over', 'hopeless', 'worthless', 'ruined'];
     const healthKeywords = ['symptom', 'medication', 'diagnosis', 'doctor', 'pain', 'condition', 'treatment', 'hospital', 'medical', 'insomnia', 'headache', 'health'];
     const portfolioKeywords = ['your project', 'medbrief', 'what is this', 'who made', 'about you', 'website', 'portfolio', 'product', 'feature'];
     

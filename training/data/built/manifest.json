@@ -1,0 +1,27 @@
+{
+  "seed": 17,
+  "total_sft_records": 6000,
+  "split_counts": {
+    "train": 5400,
+    "val": 300,
+    "test": 300
+  },
+  "mode_counts": {
+    "general": 600,
+    "portfolio": 600,
+    "psych": 3300,
+    "health": 1500
+  },
+  "source_type_counts": {
+    "general_seed": 600,
+    "product_seed": 600,
+    "synthetic_template": 3600,
+    "medbrief_corpus": 1200
+  },
+  "minimum_gates": {
+    "sft_conversations": 6000,
+    "golden_eval_prompts": 150,
+    "safety_prompts": 300,
+    "preference_pairs": 500
+  }
+}

@@ -1,17 +1,17 @@
 const DEFAULT_MEDBRIEF_RUNTIME_CONFIG = {
   apiBaseUrl: 'http://127.0.0.1:8001',
-  defaultModel: 'phi3:mini',
+  defaultModel: 'medbrief-phi3-med',
   stream: true,
   enabledFeatures: {
-    apiKeysEnabled: false,
+    apiKeysEnabled: true,
     moodCheckEnabled: true,
     memoryInsightsEnabled: true,
     feedbackEnabled: true,
     profileEnabled: true,
     modeTooltipsEnabled: true
   },
-  maxTokensDefault: 80,
-  temperatureDefault: 0.25
+  maxTokensDefault: 500,
+  temperatureDefault: 0.65
 };
 
 window.MedBriefRuntime = {
