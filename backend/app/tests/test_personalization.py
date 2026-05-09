@@ -11,7 +11,7 @@ from backend.app.personalization import (
     render_personalized_response,
 )
 from backend.app.schemas import ChatCompletionRequest, ChatMessage, UserProfile
-from backend.app.safety import degraded_mode_response, evaluate_request, is_low_quality_response
+from backend.app.safety import evaluate_request, is_low_quality_response
 from backend.app.settings import Settings
 
 
@@ -144,6 +144,16 @@ class PersonalizationPlanningTests(unittest.TestCase):
         self.assertTrue(quality.generic_response)
         self.assertTrue(quality.should_override)
 
+    def test_old_practical_layer_template_is_rejected(self) -> None:
+        plan = plan_for([("user", "hi")])
+        quality = evaluate_response_quality(
+            "That question has a practical layer and a conceptual layer, and it helps to decide which one matters more first.",
+            plan,
+        )
+
+        self.assertTrue(quality.generic_response)
+        self.assertTrue(quality.should_override)
+
     def test_purpose_answer_can_be_conceptual_without_copying_user_words(self) -> None:
         plan = plan_for([("user", "what is the purpose of anything")])
         quality = evaluate_response_quality(
@@ -161,11 +171,14 @@ class PersonalizationPlanningTests(unittest.TestCase):
             )
         )
 
-    def test_plan_renderer_is_disabled_for_normal_chat(self) -> None:
+    def test_plan_renderer_answers_purpose_directly(self) -> None:
         plan = plan_for([("user", "what is the purpose of anything")])
 
-        with self.assertRaises(RuntimeError):
-            render_personalized_response(plan)
+        text = render_personalized_response(plan)
+
+        self.assertIn("purpose", text.lower())
+        self.assertNotIn("The important part is", text)
+        self.assertFalse(evaluate_response_quality(text, plan).should_override)
 
     def test_explicit_crisis_still_routes_to_safety(self) -> None:
         plan = plan_for([("user", "I want to die")])
@@ -185,7 +198,7 @@ class PersonalizationPlanningTests(unittest.TestCase):
 
 
 class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runtime_degrades_instead_of_serving_coded_generic_response(self) -> None:
+    async def test_runtime_replaces_coded_generic_response_with_personalized_fallback(self) -> None:
         request = ChatCompletionRequest(
             messages=[ChatMessage(role="user", content="fuck life")],
             max_tokens=120,
@@ -206,8 +219,31 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             fallback_engine=None,
         )
 
-        self.assertEqual(text, degraded_mode_response())
-        self.assertIn("generic_response", telemetry["personalization_flags"])
+        self.assertIn("Fuck life", text)
+        self.assertIn("safe", text.lower())
+        self.assertNotIn("Tell me what outcome you want", text)
+        self.assertTrue(telemetry["fallback_flag"])
+        self.assertNotIn("generic_response", telemetry["personalization_flags"])
+
+    async def test_mock_runtime_uses_plan_renderer_instead_of_template_engine(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hi")],
+            max_tokens=120,
+            stream=False,
+        )
+        engine = FakeEngine([])
+
+        _body, telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(inference_engine="mock"),
+            engine,
+            fallback_engine=None,
+        )
+
+        self.assertIn("Hey", text)
+        self.assertNotIn("practical layer", text)
+        self.assertEqual(telemetry["engine"], "mock")
 
     async def test_runtime_does_not_redact_user_language_in_model_answer(self) -> None:
         request = ChatCompletionRequest(

@@ -117,6 +117,10 @@ GENERIC_MARKERS = (
     "the useful focus is",
     "i am reading this as",
     "the useful response is",
+    "practical layer and a conceptual layer",
+    "break the question into its smaller working parts",
+    "clarifying what kind of answer would actually help",
+    "valid ways to frame this",
     "not a canned framework",
     "the next thing to do is a direct answer",
     "the important part is",
@@ -347,12 +351,13 @@ def understand_conversation(
 
 
 def render_personalized_response(plan: ResponsePlan) -> str:
-    raise RuntimeError(
-        "Plan-rendered normal chat responses are disabled. Use the LLM runtime and quality retry gate instead."
-    )
     understanding = plan.understanding
     topic = _user_facing_fragment(understanding.topic)
     latest_fragment = _user_facing_fragment(understanding.latest_user)
+    lowered = _normalize(understanding.latest_user)
+
+    if _is_greeting(lowered):
+        return _greeting_response(plan)
 
     if understanding.frustration_at_assistant:
         return _assistant_repair_response(plan)
@@ -363,6 +368,9 @@ def render_personalized_response(plan: ResponsePlan) -> str:
             "Please call or text 988 right now if you're in the US, or contact local emergency services if you may act on these thoughts. "
             "If someone is nearby, tell them plainly that you need help staying safe right now."
         )
+
+    if understanding.distress_level >= 2:
+        return _high_distress_response(plan)
 
     if understanding.user_intent == "next_step":
         return _pick(
@@ -379,25 +387,6 @@ def render_personalized_response(plan: ResponsePlan) -> str:
                 (
                     f"Do not solve the entire situation from inside the panic. Take the nearest piece: what happened, what needs a response today, and what can wait. "
                     "Give me just the first piece and I will help turn it into an action."
-                ),
-            ],
-        )
-
-    if understanding.distress_level >= 3:
-        return _pick(
-            plan,
-            [
-                (
-                    f"{latest_fragment.capitalize()} sounds like your mind has collapsed everything into one verdict. "
-                    "Do not trust that verdict while you are this flooded. First, make the next ten minutes safe and simple: breathe, sit somewhere steady, and name what triggered this today."
-                ),
-                (
-                    f"I hear the weight in {latest_fragment}. The priority is not meaning or productivity right now; it is getting your thinking back online. "
-                    "Tell me the smallest concrete event that set this off, not the whole life story."
-                ),
-                (
-                    f"That is not a small sentence. {latest_fragment.capitalize()} means this needs a grounded answer, not a slogan. "
-                    "Before solving anything, check the immediate basics: are you safe, are you alone, and what is the one thing that happened most recently?"
                 ),
             ],
         )
@@ -476,7 +465,7 @@ def render_personalized_response(plan: ResponsePlan) -> str:
         [
             f"I take {topic} to be the thing that matters here. The useful next move is to make it concrete enough to act on.",
             f"{topic.capitalize()} is the center of this. I would handle it by naming the goal, the obstacle, and the next action.",
-            f"The important part is {topic}. Tell me what outcome you want, and I will shape the answer around that instead of guessing.",
+            f"For {topic}, start with the simplest true sentence about what is happening, then choose the next action from there.",
         ],
     )
 
@@ -579,6 +568,69 @@ def _assistant_repair_response(plan: ResponsePlan) -> str:
         "You're right to call that out. I gave you distance when you needed a direct answer. "
         "I will answer the actual message now: what matters is the specific thing you are carrying, not a generic framework around it."
     )
+
+
+def _is_greeting(lowered: str) -> bool:
+    compact = lowered.strip(" .!?")
+    return compact in {"hi", "hey", "hello", "yo", "sup", "heyy", "hiya"}
+
+
+def _greeting_response(plan: ResponsePlan) -> str:
+    del plan
+    return (
+        "Hey. I am here with you. Send me what you want to talk through, test, build, or continue from the last chat."
+    )
+
+
+def _high_distress_response(plan: ResponsePlan) -> str:
+    understanding = plan.understanding
+    latest = _normalize(understanding.latest_user)
+    latest_fragment = _user_facing_fragment(understanding.latest_user)
+    memory = _memory_clause(plan)
+    safety_check = ""
+    if any(term in latest for term in ("giving up", "give up", "fuck life", "hate my life", "all over", "can't do this", "cant do this")):
+        safety_check = " Are you safe right now, as in not about to hurt yourself?"
+
+    if "so much pressure" in latest or "pressure" in latest:
+        return (
+            f"That sounds like pressure has crowded out your ability to think, not like you are failing.{memory} "
+            f"Do the next ten minutes only: sit somewhere steady, drink water if you can, and name the one pressure point that is loudest.{safety_check}"
+        ).strip()
+
+    if "dont know what to do" in latest or "don't know what to do" in latest or "cant think" in latest or "can't think" in latest:
+        return (
+            f"You do not need a whole life plan from inside this state.{memory} "
+            f"Pick the nearest concrete fact: what happened today, who is involved, and what has to be handled first?{safety_check}"
+        ).strip()
+
+    if "hate my life" in latest or "fuck life" in latest:
+        return (
+            f"{latest_fragment.capitalize()} sounds like pain talking at full volume, not a final truth about your life.{memory} "
+            f"Right now the job is to lower the intensity enough to think: put both feet on the floor, unclench your hands, and tell me what set this off.{safety_check}"
+        ).strip()
+
+    if "alone" in latest or "lonely" in latest or "ignored" in latest:
+        return (
+            f"That sounds lonely in a way that makes the situation feel even heavier.{memory} "
+            "Do not turn that into proof that nobody cares; start with one reachable person or one concrete place where you are not by yourself."
+        )
+
+    if "shame" in latest or "ashamed" in latest or "failure" in latest or "failed" in latest:
+        return (
+            f"I hear shame in this, and shame tends to turn one painful result into a verdict on your whole self.{memory} "
+            "Separate the event from the sentence your mind wrote about you, then give me the event only."
+        )
+
+    if "grief" in latest or "lost" in latest or "loss" in latest or "miss them" in latest:
+        return (
+            f"This sounds like grief or loss, not something to solve by being tougher.{memory} "
+            "The next useful move is smaller: name what you miss most in this exact moment, then we can stay with that piece."
+        )
+
+    return (
+        f"{latest_fragment.capitalize()} sounds immediate and personal, not abstract.{memory} "
+        f"Before trying to solve the whole thing, make the next few minutes safe and simple, then tell me what happened right before this feeling spiked.{safety_check}"
+    ).strip()
 
 
 def _answer_direct_question(plan: ResponsePlan) -> str:
