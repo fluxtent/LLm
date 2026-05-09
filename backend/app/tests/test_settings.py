@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from backend.app.settings import Settings
 
@@ -27,28 +28,30 @@ class SettingsValidationTests(unittest.TestCase):
         self.assertEqual(settings.validate_for_production(), [])
 
     def test_default_engine_uses_local_ollama_when_available(self) -> None:
-        settings = Settings(
-            inference_engine="",
-            openai_api_key="",
-            vllm_base_url="",
-            ollama_base_url="http://127.0.0.1:11434",
-            ollama_model="phi3:mini",
-        )
+        with patch("backend.app.settings._ollama_model_installed", return_value=True):
+            settings = Settings(
+                inference_engine="",
+                openai_api_key="",
+                vllm_base_url="",
+                ollama_base_url="http://127.0.0.1:11434",
+                ollama_model="phi3:mini",
+            )
 
-        self.assertEqual(settings.active_engine, "ollama")
-        self.assertEqual(settings.runtime_model_id, "phi3:mini")
+            self.assertEqual(settings.active_engine, "ollama")
+            self.assertEqual(settings.runtime_model_id, "phi3:mini")
 
     def test_default_engine_uses_custom_when_no_local_model_exists(self) -> None:
-        settings = Settings(
-            inference_engine="",
-            openai_api_key="",
-            vllm_base_url="",
-            ollama_base_url="http://127.0.0.1:11434",
-            ollama_model="definitely-not-installed:latest",
-        )
+        with patch("backend.app.settings._ollama_model_installed", return_value=False):
+            settings = Settings(
+                inference_engine="",
+                openai_api_key="",
+                vllm_base_url="",
+                ollama_base_url="http://127.0.0.1:11434",
+                ollama_model="definitely-not-installed:latest",
+            )
 
-        self.assertEqual(settings.active_engine, "custom")
-        self.assertEqual(settings.runtime_model_id, "medbrief-phi3-med")
+            self.assertEqual(settings.active_engine, "custom")
+            self.assertEqual(settings.runtime_model_id, "medbrief-phi3-med")
 
     def test_openai_requires_explicit_engine(self) -> None:
         settings = Settings(

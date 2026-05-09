@@ -100,11 +100,17 @@ class MemoryStore:
                 "feedback": self.feedback,
                 "api_keys": list(self.api_keys.values()),
             }
-            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-            self.storage_path.write_text(
-                json.dumps(payload, indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
+            try:
+                self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+                self.storage_path.write_text(
+                    json.dumps(payload, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+            except OSError:
+                # Serverless platforms such as Vercel may expose a read-only
+                # application directory. Keep the in-memory state for the warm
+                # invocation instead of taking chat/profile requests down.
+                self.storage_path = None
 
     def upsert_profile(self, profile: UserProfile) -> UserProfile:
         with self._lock:

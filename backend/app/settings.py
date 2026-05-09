@@ -24,6 +24,12 @@ def _list_env(name: str, default: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def _default_store_path() -> str:
+    if os.getenv("VERCEL"):
+        return "/tmp/medbrief_store.json"
+    return str(Path(__file__).resolve().parents[1] / ".data" / "medbrief_store.json")
+
+
 def _ollama_model_installed(model_name: str) -> bool:
     """Best-effort local check that avoids choosing Ollama on machines without models."""
     if not model_name:
@@ -83,10 +89,7 @@ class Settings:
     custom_vocab_path: str = os.getenv("MEDBRIEF_CUSTOM_VOCAB_PATH", "vocab.json")
     custom_merges_path: str = os.getenv("MEDBRIEF_CUSTOM_MERGES_PATH", "merges.pkl")
     custom_allow_cpu: bool = _bool_env("MEDBRIEF_CUSTOM_ALLOW_CPU", True)
-    store_path: str = os.getenv(
-        "MEDBRIEF_STORE_PATH",
-        str(Path(__file__).resolve().parents[1] / ".data" / "medbrief_store.json"),
-    )
+    store_path: str = os.getenv("MEDBRIEF_STORE_PATH", _default_store_path())
     api_keys_enabled: bool = _bool_env("MEDBRIEF_API_KEYS_ENABLED", True)
     require_api_key: bool = _bool_env("MEDBRIEF_REQUIRE_API_KEY", False)
     admin_token: str = os.getenv("MEDBRIEF_ADMIN_TOKEN", "")

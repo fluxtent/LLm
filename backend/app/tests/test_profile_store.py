@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.app.profile_store import MemoryStore
 from backend.app.schemas import UserProfile
@@ -39,6 +40,16 @@ class MemoryStoreTests(unittest.TestCase):
             store.revoke_api_key(record["id"])
 
             self.assertIsNone(store.authenticate_api_key(raw_key))
+
+    def test_storage_write_failure_keeps_chat_state_in_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(storage_path=Path(temp_dir) / "store.json")
+            with patch.object(Path, "write_text", side_effect=OSError("read-only")):
+                stored = store.upsert_profile(UserProfile(user_id="user-1", recurring_topics=["school"]))
+
+            self.assertEqual(stored.recurring_topics, ["school"])
+            self.assertIsNone(store.storage_path)
+            self.assertEqual(store.get_profile("user-1").recurring_topics, ["school"])
 
 
 if __name__ == "__main__":
