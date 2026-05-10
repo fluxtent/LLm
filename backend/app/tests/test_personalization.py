@@ -236,6 +236,47 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("model backend unavailable", text)
         self.assertTrue(telemetry["fallback_flag"])
 
+    async def test_local_fallback_answers_medical_specialty_without_generic_shell(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="what is nephrology")],
+            max_tokens=160,
+            stream=False,
+        )
+        engine = FakeEngine([])
+
+        _body, telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(inference_engine="vllm"),
+            engine,
+            fallback_engine=LocalResponderEngine(),
+        )
+
+        self.assertIn("kidney", text.lower())
+        self.assertIn("medicine", text.lower())
+        self.assertNotIn("thing you are trying to pin down", text)
+        self.assertNotIn("A useful definition should say", text)
+        self.assertTrue(telemetry["fallback_flag"])
+
+    async def test_unknown_definition_refuses_shell_instead_of_word_swap(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="what is flermology")],
+            max_tokens=160,
+            stream=False,
+        )
+        engine = FakeEngine([])
+
+        _body, _telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(inference_engine="vllm"),
+            engine,
+            fallback_engine=LocalResponderEngine(),
+        )
+
+        self.assertNotIn("means the thing you are trying to pin down", text)
+        self.assertIn("not have enough", text.lower())
+
     async def test_runtime_can_still_raise_without_any_fallback(self) -> None:
         request = ChatCompletionRequest(
             messages=[ChatMessage(role="user", content="what is nephritis")],

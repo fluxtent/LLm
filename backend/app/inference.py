@@ -162,6 +162,9 @@ class LocalResponderEngine(BaseInferenceEngine):
         profile: UserProfile | None,
     ) -> str:
         subject = _definition_subject(text)
+        known = _known_medical_definition(subject or lowered)
+        if known:
+            return known
         if "nephritis" in lowered:
             return (
                 "Nephritis is inflammation of the kidneys. It can affect the kidney tissue or filtering units, and it may happen after an infection, from an autoimmune condition, from some medications, or with other kidney diseases. "
@@ -169,10 +172,13 @@ class LocalResponderEngine(BaseInferenceEngine):
                 "It is something a clinician should evaluate because the cause matters; urgent care is important if there is severe pain, very little urine, major swelling, trouble breathing, or rapidly worsening symptoms."
             )
         if subject:
+            specialty = _medical_specialty_definition(subject)
+            if specialty:
+                return specialty
             return (
-                f"{subject.capitalize()} is a medical term, so the safe answer is general rather than diagnostic. "
-                "The useful way to understand it is: what body system it affects, what symptoms or test findings point toward it, how long it has been happening, and whether it is getting worse. "
-                "If you are asking because of symptoms or a lab result, the next useful details are age, timing, severity, related symptoms, and what the report or clinician actually said."
+                f"{subject.capitalize()} is not a term I can define confidently from the local medical knowledge base alone. "
+                "If it is from a lab report, diagnosis list, or class note, send the surrounding sentence and I can explain it in context without pretending certainty. "
+                "For health terms, context matters: the body system, symptoms, timeline, and exact wording often change the meaning."
             )
         if medical_context.symptoms:
             symptom = medical_context.symptoms[0]
@@ -237,6 +243,9 @@ class LocalResponderEngine(BaseInferenceEngine):
     def _general_response(self, text: str, lowered: str, previous_user: list[str]) -> str:
         subject = _definition_subject(text)
         if subject:
+            known = _known_general_definition(subject)
+            if known:
+                return known
             if subject in {"anything", "everything"}:
                 return (
                     f"{subject.capitalize()} is a broad word, so the direct answer depends on the frame. "
@@ -244,9 +253,8 @@ class LocalResponderEngine(BaseInferenceEngine):
                     "If you mean purpose or meaning, that is a different question: purpose is the role something serves or the reason it matters."
                 )
             return (
-                f"{subject.capitalize()} means the thing you are trying to pin down in context. "
-                "A useful definition should say what it is, what it does, and what makes it different from nearby ideas. "
-                "If you want, I can make it simpler, more technical, or give examples."
+                f"I do not want to fake a definition for {subject}. "
+                "Give me the context where you saw it, or ask for a specific angle, and I can answer that directly instead of swapping the word into a canned sentence."
             )
         if previous_user and any(token in lowered for token in ("this", "that", "it", "again")):
             return (
@@ -275,11 +283,112 @@ def _definition_subject(text: str) -> str:
     return subject[:80].strip()
 
 
+def _known_medical_definition(subject: str) -> str:
+    normalized = _normalize(subject).strip(" ?.!").replace("-", " ")
+    definitions = {
+        "nephrology": (
+            "Nephrology is the branch of medicine that focuses on the kidneys. "
+            "Nephrologists deal with kidney function, chronic kidney disease, kidney inflammation, electrolyte problems, blood-pressure problems related to the kidneys, dialysis, and transplant-related kidney care. "
+            "So the simple version is: nephrology is kidney medicine."
+        ),
+        "nephritis": (
+            "Nephritis is inflammation of the kidneys. It can affect the kidney tissue or filtering units, and it may happen after an infection, from an autoimmune condition, from some medications, or with other kidney diseases. "
+            "Common clues can include blood or protein in the urine, swelling, high blood pressure, fever, flank pain, or changes in urination, but some cases are found only on urine or blood tests. "
+            "It is something a clinician should evaluate because the cause matters."
+        ),
+        "urology": (
+            "Urology is the medical specialty focused on the urinary tract and the male reproductive system. "
+            "Urologists handle problems involving the kidneys' drainage system, ureters, bladder, urethra, prostate, kidney stones, urinary obstruction, and many surgical urinary conditions. "
+            "The quick distinction: nephrology is kidney function; urology is the urinary tract and surgical plumbing side."
+        ),
+        "cardiology": (
+            "Cardiology is the branch of medicine focused on the heart and blood vessels. "
+            "Cardiologists evaluate things like chest pain, heart rhythm problems, heart failure, valve disease, high blood pressure complications, and coronary artery disease."
+        ),
+        "neurology": (
+            "Neurology is the branch of medicine focused on the brain, spinal cord, nerves, and muscles. "
+            "Neurologists evaluate problems like seizures, migraines, stroke symptoms, weakness, numbness, tremor, multiple sclerosis, and nerve pain."
+        ),
+        "oncology": (
+            "Oncology is the branch of medicine focused on cancer. "
+            "Oncologists diagnose, stage, and treat cancers using tools such as chemotherapy, immunotherapy, targeted therapy, radiation coordination, and long-term surveillance."
+        ),
+        "endocrinology": (
+            "Endocrinology is the branch of medicine focused on hormones and hormone-producing glands. "
+            "It covers conditions like diabetes, thyroid disease, adrenal problems, pituitary disorders, and some reproductive hormone issues."
+        ),
+        "dermatology": (
+            "Dermatology is the branch of medicine focused on skin, hair, and nails. "
+            "Dermatologists handle rashes, acne, eczema, psoriasis, skin infections, hair loss, and skin cancer screening."
+        ),
+        "gastroenterology": (
+            "Gastroenterology is the branch of medicine focused on the digestive system. "
+            "It covers the esophagus, stomach, intestines, liver, gallbladder, bile ducts, and pancreas."
+        ),
+        "rheumatology": (
+            "Rheumatology is the branch of medicine focused on autoimmune and inflammatory diseases that often affect joints, muscles, blood vessels, and connective tissue. "
+            "Rheumatologists treat conditions like rheumatoid arthritis, lupus, vasculitis, and inflammatory joint disease."
+        ),
+    }
+    return definitions.get(normalized, "")
+
+
+def _medical_specialty_definition(subject: str) -> str:
+    normalized = _normalize(subject).strip(" ?.!").replace("-", " ")
+    roots = {
+        "nephr": ("kidneys", "kidney medicine"),
+        "cardi": ("the heart", "heart medicine"),
+        "neur": ("the nervous system", "brain and nerve medicine"),
+        "onc": ("cancer", "cancer medicine"),
+        "derm": ("skin", "skin medicine"),
+        "endocrin": ("hormones and glands", "hormone medicine"),
+        "gastro": ("the digestive system", "digestive-system medicine"),
+        "rheumat": ("autoimmune and inflammatory joint/connective-tissue disease", "rheumatic disease medicine"),
+        "hemat": ("blood", "blood medicine"),
+        "pulmon": ("the lungs", "lung medicine"),
+    }
+    if normalized.endswith("ology"):
+        for root, (body_system, plain_label) in roots.items():
+            if normalized.startswith(root):
+                return (
+                    f"{subject.capitalize()} is the medical specialty that focuses on {body_system}. "
+                    f"In plain English, it means {plain_label}. "
+                    "The specialist in that field evaluates related diseases, test results, symptoms, and long-term treatment plans."
+                )
+        return (
+            f"{subject.capitalize()} is likely the study or medical specialty of a specific body system or disease area, because “-ology” means “the study of.” "
+            "I do not have enough local knowledge to name the exact field confidently, so send the context where you saw it and I can narrow it down."
+        )
+    if normalized.endswith("itis"):
+        base = normalized[:-4]
+        return (
+            f"{subject.capitalize()} usually means inflammation of something; the suffix “-itis” means inflammation. "
+            f"The exact meaning depends on what “{base}” refers to, so the surrounding medical context matters."
+        )
+    return ""
+
+
+def _known_general_definition(subject: str) -> str:
+    normalized = _normalize(subject).strip(" ?.!").replace("-", " ")
+    definitions = {
+        "purpose": (
+            "Purpose is the reason something matters or the role it serves. "
+            "For a tool, purpose is what it is used for; for a choice, it is what the choice moves you toward; for a person, purpose is usually built through what they care about and keep choosing."
+        ),
+        "meaning": (
+            "Meaning is the significance something has to a person, situation, or life. "
+            "It is not only a dictionary definition; it is why something feels worth attention, effort, grief, love, or responsibility."
+        ),
+    }
+    return definitions.get(normalized, "")
+
+
 def _looks_medical_question(lowered: str) -> bool:
     return any(
         token in lowered
         for token in (
             "itis",
+            "ology",
             "kidney",
             "disease",
             "symptom",
