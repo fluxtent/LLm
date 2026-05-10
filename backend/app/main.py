@@ -67,6 +67,10 @@ CACHE_TTL_SECONDS = 300
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "recall-app"
 
 
+class ModelUnavailableError(RuntimeError):
+    """Raised when no real model answer passes availability and quality checks."""
+
+
 def _count_tokens_rough(text: str) -> int:
     return max(1, len(text.split()))
 
@@ -348,13 +352,9 @@ async def _generate_completion(
                     upstream_model = settings.public_model_id
                     finish_reason = inference.finish_reason
                 except Exception:
-                    response_text = degraded_mode_response()
-                    upstream_model = settings.public_model_id
-                    finish_reason = "stop"
+                    raise ModelUnavailableError("model backend unavailable") from None
             else:
-                response_text = degraded_mode_response()
-                upstream_model = settings.public_model_id
-                finish_reason = "stop"
+                raise ModelUnavailableError("model backend unavailable") from None
     else:
         response_text = safety_decision.response_text or degraded_mode_response()
         upstream_model = settings.public_model_id
@@ -400,10 +400,9 @@ async def _generate_completion(
                 upstream_model = retry_inference.upstream_model or upstream_model
                 finish_reason = retry_inference.finish_reason
             else:
-                cleaned = degraded_mode_response()
-                response_quality = retry_quality
+                raise ModelUnavailableError("model output failed quality checks")
         except Exception:
-            cleaned = degraded_mode_response()
+            raise ModelUnavailableError("model backend unavailable during quality retry") from None
     cleaned = clean_response_text(cleaned)
 
     user_id = request.metadata.get("user_id")
@@ -647,6 +646,8 @@ def create_app() -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ModelUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         emit_event("chat_completion", **telemetry)
         headers = {"X-Request-ID": telemetry["request_id"]}

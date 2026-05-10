@@ -407,6 +407,8 @@ class VLLMChatEngine(BaseInferenceEngine):
         self._signing_secret = settings.vllm_signing_secret
         self._default_model = settings.vllm_model or settings.public_model_id
         self._public_model_id = settings.public_model_id
+        self._health_checked_at = 0.0
+        self._health_ok = False
 
     def _resolve_model(self, requested_model: str | None) -> str:
         if not requested_model or requested_model == self._public_model_id:
@@ -488,15 +490,27 @@ class VLLMChatEngine(BaseInferenceEngine):
         raise RuntimeError("vLLM completion failed after retries") from last_error
 
     async def health(self) -> bool:
+        now = time.time()
+        if now - self._health_checked_at < 60:
+            return self._health_ok
         try:
             async with httpx.AsyncClient(timeout=2.5) as client:
-                response = await client.get(
-                    self._openai_path("models"),
+                response = await client.post(
+                    self._openai_path("chat/completions"),
                     headers=self._headers("health-check"),
+                    json={
+                        "model": self._default_model,
+                        "messages": [{"role": "user", "content": "ok"}],
+                        "max_tokens": 1,
+                        "temperature": 0,
+                        "stream": False,
+                    },
                 )
-            return response.is_success
+            self._health_ok = response.is_success
         except httpx.HTTPError:
-            return False
+            self._health_ok = False
+        self._health_checked_at = now
+        return self._health_ok
 
 
 def create_inference_engine(settings: Settings) -> BaseInferenceEngine:

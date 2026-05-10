@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from backend.app.inference import BaseInferenceEngine, InferenceResult
-from backend.app.main import _generate_completion
+from backend.app.main import ModelUnavailableError, _generate_completion
 from backend.app.personalization import (
     apply_memory_updates,
     build_personalization_context,
@@ -10,7 +10,7 @@ from backend.app.personalization import (
     evaluate_response_quality,
 )
 from backend.app.schemas import ChatCompletionRequest, ChatMessage, UserProfile
-from backend.app.safety import degraded_mode_response, evaluate_request, is_low_quality_response
+from backend.app.safety import evaluate_request, is_low_quality_response
 from backend.app.settings import Settings
 
 
@@ -188,7 +188,7 @@ class PersonalizationPlanningTests(unittest.TestCase):
 
 
 class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runtime_degrades_instead_of_serving_coded_generic_response(self) -> None:
+    async def test_runtime_raises_instead_of_serving_coded_generic_response(self) -> None:
         request = ChatCompletionRequest(
             messages=[ChatMessage(role="user", content="fuck life")],
             max_tokens=120,
@@ -201,18 +201,14 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        _body, telemetry, text = await _generate_completion(
-            SimpleNamespace(client=None),
-            request,
-            Settings(),
-            engine,
-            fallback_engine=None,
-        )
-
-        self.assertEqual(text, degraded_mode_response())
-        self.assertNotIn("Tell me what outcome you want", text)
-        self.assertTrue(telemetry["fallback_flag"])
-        self.assertIn("generic_response", telemetry["personalization_flags"])
+        with self.assertRaises(ModelUnavailableError):
+            await _generate_completion(
+                SimpleNamespace(client=None),
+                request,
+                Settings(),
+                engine,
+                fallback_engine=None,
+            )
 
     async def test_mock_runtime_uses_engine_output_without_plan_renderer(self) -> None:
         request = ChatCompletionRequest(
