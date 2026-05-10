@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from .medical_ontology import detect_medical_context
+from .medical_ontology import MedicalContext, detect_medical_context
 from .schemas import UserProfile
 from .settings import Settings
 from .template_engine import TemplateEngine, TemplateRequest
@@ -92,6 +93,225 @@ class MockInferenceEngine(BaseInferenceEngine):
             latency_ms=int((time.perf_counter() - started) * 1000),
             upstream_model=model,
         )
+
+
+class LocalResponderEngine(BaseInferenceEngine):
+    name = "local-responder"
+
+    async def complete(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        request_id: str,
+        mode: str,
+        conversation_id: str | None = None,
+        profile: UserProfile | None = None,
+    ) -> InferenceResult:
+        del max_tokens, temperature, top_p, request_id, conversation_id
+        started = time.perf_counter()
+        latest_user = next(message["content"] for message in reversed(messages) if message["role"] == "user")
+        previous_user = [
+            message["content"] for message in messages if message["role"] == "user"
+        ][:-1]
+        text = self._respond(
+            latest_user=latest_user,
+            previous_user=previous_user[-3:],
+            mode=mode,
+            profile=profile,
+            medical_context=detect_medical_context(latest_user),
+        )
+        return InferenceResult(
+            text=text,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            upstream_model=model,
+        )
+
+    async def health(self) -> bool:
+        return True
+
+    def _respond(
+        self,
+        *,
+        latest_user: str,
+        previous_user: list[str],
+        mode: str,
+        profile: UserProfile | None,
+        medical_context: MedicalContext,
+    ) -> str:
+        text = _strip_mode_tag(latest_user)
+        lowered = _normalize(text)
+        if lowered.strip(" .!?") in {"hi", "hey", "hello", "yo"}:
+            return "Hey. I am here and ready. Send the question, feeling, symptom, or project you want to work through."
+        if mode == "health" or medical_context.has_medical_signal or _looks_medical_question(lowered):
+            return self._health_response(text, lowered, medical_context, profile)
+        if mode == "psych" or _distress_score(lowered) > 0:
+            return self._support_response(text, lowered, previous_user, profile)
+        if mode == "portfolio" or "medbrief" in lowered or "api key" in lowered:
+            return self._product_response(text)
+        return self._general_response(text, lowered, previous_user)
+
+    def _health_response(
+        self,
+        text: str,
+        lowered: str,
+        medical_context: MedicalContext,
+        profile: UserProfile | None,
+    ) -> str:
+        subject = _definition_subject(text)
+        if "nephritis" in lowered:
+            return (
+                "Nephritis is inflammation of the kidneys. It can affect the kidney tissue or filtering units, and it may happen after an infection, from an autoimmune condition, from some medications, or with other kidney diseases. "
+                "Common clues can include blood or protein in the urine, swelling, high blood pressure, fever, flank pain, or changes in urination, but some cases are found only on urine or blood tests. "
+                "It is something a clinician should evaluate because the cause matters; urgent care is important if there is severe pain, very little urine, major swelling, trouble breathing, or rapidly worsening symptoms."
+            )
+        if subject:
+            return (
+                f"{subject.capitalize()} is a medical term, so the safe answer is general rather than diagnostic. "
+                "The useful way to understand it is: what body system it affects, what symptoms or test findings point toward it, how long it has been happening, and whether it is getting worse. "
+                "If you are asking because of symptoms or a lab result, the next useful details are age, timing, severity, related symptoms, and what the report or clinician actually said."
+            )
+        if medical_context.symptoms:
+            symptom = medical_context.symptoms[0]
+            return (
+                f"{symptom.capitalize()} can come from several different causes, so I would not treat one message as a diagnosis. "
+                "What matters is when it started, how severe it is, whether it is worsening, and what else is happening with it. "
+                "If it is sudden, severe, persistent, or paired with alarming symptoms, getting medical care is the right move."
+            )
+        return (
+            "I can answer this as general health education, not a diagnosis. "
+            "The useful details are what changed, when it started, how severe it is, what else is happening, and whether it is affecting daily function. "
+            "If you give me the specific term, symptom, or lab result, I can explain what it usually means and what details a clinician would care about."
+        )
+
+    def _support_response(
+        self,
+        text: str,
+        lowered: str,
+        previous_user: list[str],
+        profile: UserProfile | None,
+    ) -> str:
+        del profile
+        continuity = ""
+        if previous_user and any(token in lowered for token in ("this", "that", "again", "either", "same")):
+            continuity = f" I am reading this in context of what you just said: {previous_user[-1][:120].strip()}."
+        safety = ""
+        if any(token in lowered for token in ("giving up", "give up", "fuck life", "hate my life", "can't do this", "cant do this")):
+            safety = " Are you safe right now, meaning not about to hurt yourself?"
+        if "pressure" in lowered:
+            return (
+                f"That sounds like pressure is crowding out your ability to think, not like you are weak.{continuity} "
+                f"For the next few minutes, shrink the problem: sit somewhere steady, breathe slower than feels natural, and name the single pressure point that is loudest.{safety}"
+            ).strip()
+        if "hate my life" in lowered or "fuck life" in lowered:
+            return (
+                f"{text.strip().capitalize()} sounds like pain talking at full volume, not a final verdict on your life.{continuity} "
+                f"Right now the first job is safety and getting your thinking back online: feet on the floor, unclench your hands, and tell me what happened right before this spiked.{safety}"
+            ).strip()
+        if "dont know what to do" in lowered or "don't know what to do" in lowered:
+            return (
+                f"You do not need to solve your whole life from inside this state.{continuity} "
+                "Give me the nearest concrete fact: what happened today, who is involved, and what has to be handled first."
+            )
+        return (
+            f"What you wrote sounds personal, not abstract.{continuity} "
+            "The useful move is to slow it down into: what happened, what it made you feel, and what your mind concluded from it. "
+            "Start with the first part only."
+        )
+
+    def _product_response(self, text: str) -> str:
+        lowered = _normalize(text)
+        if "api" in lowered or "key" in lowered:
+            return (
+                "MedBrief API keys are generated by this app and are used to call its own OpenAI-compatible `/v1/chat/completions` endpoint. "
+                "They are not OpenAI keys; they authenticate requests into the MedBrief gateway, which then routes to the configured MedBrief model backend and applies memory, safety, and response-quality checks."
+            )
+        return (
+            "MedBrief AI is meant to be its own assistant surface: chat UI, memory, generated API keys, safety handling, and a model gateway behind one product. "
+            "The important architecture point is that the website should call MedBrief's backend, not require users to bring their own key."
+        )
+
+    def _general_response(self, text: str, lowered: str, previous_user: list[str]) -> str:
+        subject = _definition_subject(text)
+        if subject:
+            if subject in {"anything", "everything"}:
+                return (
+                    f"{subject.capitalize()} is a broad word, so the direct answer depends on the frame. "
+                    "In plain terms, it means the set of possible things being talked about; philosophically, it points at existence as a whole rather than one object. "
+                    "If you mean purpose or meaning, that is a different question: purpose is the role something serves or the reason it matters."
+                )
+            return (
+                f"{subject.capitalize()} means the thing you are trying to pin down in context. "
+                "A useful definition should say what it is, what it does, and what makes it different from nearby ideas. "
+                "If you want, I can make it simpler, more technical, or give examples."
+            )
+        if previous_user and any(token in lowered for token in ("this", "that", "it", "again")):
+            return (
+                f"You are referring back to the last point: {previous_user[-1][:140].strip()}. "
+                "The direct next step is to name which part you want resolved: the meaning, the decision, the cause, or the action."
+            )
+        return (
+            "I can help with that. Give me the exact thing you want answered, built, compared, or explained, and I will respond directly to that instead of wrapping it in a generic framework."
+        )
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+def _strip_mode_tag(text: str) -> str:
+    return re.sub(r"^\s*\[mode:[a-z]+\]\s*", "", text, flags=re.I).strip()
+
+
+def _definition_subject(text: str) -> str:
+    cleaned = _strip_mode_tag(text).strip()
+    match = re.match(r"^(what is|what's|define|explain)\s+(.+?)[?.!]*$", cleaned, flags=re.I)
+    if not match:
+        return ""
+    subject = re.sub(r"^(a|an|the)\s+", "", match.group(2).strip(), flags=re.I)
+    return subject[:80].strip()
+
+
+def _looks_medical_question(lowered: str) -> bool:
+    return any(
+        token in lowered
+        for token in (
+            "itis",
+            "kidney",
+            "disease",
+            "symptom",
+            "diagnosis",
+            "treatment",
+            "blood test",
+            "urine",
+            "infection",
+            "inflammation",
+        )
+    )
+
+
+def _distress_score(lowered: str) -> int:
+    return sum(
+        1
+        for token in (
+            "fuck life",
+            "hate my life",
+            "giving up",
+            "give up",
+            "pressure",
+            "overwhelmed",
+            "can't think",
+            "cant think",
+            "dont know what to do",
+            "don't know what to do",
+            "alone",
+            "failure",
+        )
+        if token in lowered
+    )
 
 
 class CustomMedBriefEngine(BaseInferenceEngine):

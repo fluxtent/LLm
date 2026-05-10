@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .constants import FRONTEND_FEATURE_FLAGS, PRIVACY_DISCLAIMER, SUPPORTED_MODES
-from .inference import BaseInferenceEngine, MockInferenceEngine, create_inference_engine
+from .inference import BaseInferenceEngine, LocalResponderEngine, MockInferenceEngine, create_inference_engine
 from .personalization import (
     apply_memory_updates,
     build_personalization_context,
@@ -400,9 +400,51 @@ async def _generate_completion(
                 upstream_model = retry_inference.upstream_model or upstream_model
                 finish_reason = retry_inference.finish_reason
             else:
-                raise ModelUnavailableError("model output failed quality checks")
+                if fallback_engine is None:
+                    raise ModelUnavailableError("model output failed quality checks")
+                fallback_inference = await fallback_engine.complete(
+                    messages=prompt_bundle.upstream_messages,
+                    model=request.model or settings.public_model_id,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    request_id=f"{request_id}-local-fallback",
+                    mode=prompt_bundle.mode,
+                    conversation_id=request.conversation_id,
+                    profile=profile,
+                )
+                cleaned = clean_response_text(fallback_inference.text)
+                if prompt_bundle.mode == "health":
+                    cleaned, medical_guard_hit = postprocess_health_response(cleaned)
+                    fallback_used = fallback_used or medical_guard_hit
+                response_quality = evaluate_response_quality(cleaned, response_plan)
+                if is_low_quality_response(cleaned) or response_quality.should_override:
+                    raise ModelUnavailableError("local response failed quality checks")
+                upstream_model = fallback_inference.upstream_model or upstream_model
+                finish_reason = fallback_inference.finish_reason
         except Exception:
-            raise ModelUnavailableError("model backend unavailable during quality retry") from None
+            if fallback_engine is None:
+                raise ModelUnavailableError("model backend unavailable during quality retry") from None
+            fallback_inference = await fallback_engine.complete(
+                messages=prompt_bundle.upstream_messages,
+                model=request.model or settings.public_model_id,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                request_id=f"{request_id}-local-fallback",
+                mode=prompt_bundle.mode,
+                conversation_id=request.conversation_id,
+                profile=profile,
+            )
+            cleaned = clean_response_text(fallback_inference.text)
+            if prompt_bundle.mode == "health":
+                cleaned, medical_guard_hit = postprocess_health_response(cleaned)
+                fallback_used = fallback_used or medical_guard_hit
+            response_quality = evaluate_response_quality(cleaned, response_plan)
+            if is_low_quality_response(cleaned) or response_quality.should_override:
+                raise ModelUnavailableError("local response failed quality checks") from None
+            upstream_model = fallback_inference.upstream_model or upstream_model
+            finish_reason = fallback_inference.finish_reason
     cleaned = clean_response_text(cleaned)
 
     user_id = request.metadata.get("user_id")
@@ -448,7 +490,7 @@ def create_app() -> FastAPI:
         if errors:
             raise RuntimeError("Production config errors: " + "; ".join(errors))
     engine = create_inference_engine(settings)
-    fallback_engine: BaseInferenceEngine | None = None
+    fallback_engine: BaseInferenceEngine | None = LocalResponderEngine()
 
     app = FastAPI(title=settings.api_title, version=settings.release_version)
     app.add_middleware(

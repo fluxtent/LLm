@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from backend.app.inference import BaseInferenceEngine, InferenceResult
+from backend.app.inference import BaseInferenceEngine, InferenceResult, LocalResponderEngine
 from backend.app.main import ModelUnavailableError, _generate_completion
 from backend.app.personalization import (
     apply_memory_updates,
@@ -188,7 +188,7 @@ class PersonalizationPlanningTests(unittest.TestCase):
 
 
 class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runtime_raises_instead_of_serving_coded_generic_response(self) -> None:
+    async def test_runtime_uses_local_fallback_instead_of_coded_generic_response(self) -> None:
         request = ChatCompletionRequest(
             messages=[ChatMessage(role="user", content="fuck life")],
             max_tokens=120,
@@ -201,12 +201,54 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
+        _body, telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(),
+            engine,
+            fallback_engine=LocalResponderEngine(),
+        )
+
+        self.assertIn("Fuck life", text)
+        self.assertIn("safe", text.lower())
+        self.assertNotIn("Tell me what outcome you want", text)
+        self.assertNotIn("[redacted]", text)
+        self.assertTrue(telemetry["fallback_flag"])
+
+    async def test_local_fallback_answers_health_definition(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="what is nephritis")],
+            max_tokens=160,
+            stream=False,
+        )
+        engine = FakeEngine([])
+
+        _body, telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(inference_engine="vllm"),
+            engine,
+            fallback_engine=LocalResponderEngine(),
+        )
+
+        self.assertIn("Nephritis", text)
+        self.assertIn("kidneys", text)
+        self.assertNotIn("model backend unavailable", text)
+        self.assertTrue(telemetry["fallback_flag"])
+
+    async def test_runtime_can_still_raise_without_any_fallback(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="what is nephritis")],
+            max_tokens=120,
+            stream=False,
+        )
+
         with self.assertRaises(ModelUnavailableError):
             await _generate_completion(
                 SimpleNamespace(client=None),
                 request,
-                Settings(),
-                engine,
+                Settings(inference_engine="vllm"),
+                FakeEngine([]),
                 fallback_engine=None,
             )
 
