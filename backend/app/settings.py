@@ -11,6 +11,8 @@ from pathlib import Path
 
 from .constants import FRONTEND_FEATURE_FLAGS
 
+DEFAULT_GATEWAY_MODEL_ID = "meta/llama-3.3-70b"
+
 
 def _bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -28,6 +30,17 @@ def _default_store_path() -> str:
     if os.getenv("VERCEL"):
         return "/tmp/medbrief_store.json"
     return str(Path(__file__).resolve().parents[1] / ".data" / "medbrief_store.json")
+
+
+def _default_environment() -> str:
+    return os.getenv("MEDBRIEF_ENV") or ("production" if os.getenv("VERCEL") else "development")
+
+
+def _model_env(name: str, default: str = "") -> str:
+    value = os.getenv(name, "").strip()
+    if not value or value == name:
+        return default
+    return value
 
 
 def _ollama_model_installed(model_name: str) -> bool:
@@ -57,7 +70,7 @@ def _ollama_model_installed(model_name: str) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    environment: str = os.getenv("MEDBRIEF_ENV", "development")
+    environment: str = _default_environment()
     api_title: str = os.getenv("MEDBRIEF_API_TITLE", "MedBrief AI Gateway")
     release_version: str = os.getenv("MEDBRIEF_RELEASE_VERSION", "0.3.0")
     public_model_id: str = os.getenv("MEDBRIEF_MODEL_ID", "medbrief-phi3-med")
@@ -68,8 +81,9 @@ class Settings:
     openai_api_key: str = os.getenv("MEDBRIEF_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
     openai_base_url: str = os.getenv("MEDBRIEF_OPENAI_BASE_URL", "https://api.openai.com")
     openai_model: str = os.getenv("MEDBRIEF_OPENAI_MODEL", "gpt-5.4-mini")
-    vllm_base_url: str = os.getenv("MEDBRIEF_VLLM_BASE_URL", "")
-    vllm_api_key: str = os.getenv("MEDBRIEF_VLLM_API_KEY", "medbrief-local")
+    vllm_base_url: str = os.getenv("MEDBRIEF_VLLM_BASE_URL", os.getenv("LLM_PROVIDER_BASE_URL", ""))
+    vllm_api_key: str = os.getenv("MEDBRIEF_VLLM_API_KEY", os.getenv("LLM_PROVIDER_API_KEY", "medbrief-local"))
+    vllm_model: str = _model_env("MEDBRIEF_VLLM_MODEL", _model_env("LLM_MODEL_BACKEND", DEFAULT_GATEWAY_MODEL_ID))
     vllm_signing_secret: str = os.getenv("MEDBRIEF_VLLM_SIGNING_SECRET", "")
     ollama_base_url: str = os.getenv("MEDBRIEF_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     ollama_model: str = os.getenv("MEDBRIEF_OLLAMA_MODEL", "phi3:mini")
@@ -95,7 +109,7 @@ class Settings:
     admin_token: str = os.getenv("MEDBRIEF_ADMIN_TOKEN", "")
     allow_public_key_generation: bool = _bool_env(
         "MEDBRIEF_ALLOW_PUBLIC_KEY_GENERATION",
-        os.getenv("MEDBRIEF_ENV", "development").lower() != "production",
+        _default_environment().lower() != "production",
     )
     allowed_origins: tuple[str, ...] = _list_env(
         "MEDBRIEF_ALLOWED_ORIGINS",
@@ -111,8 +125,11 @@ class Settings:
 
     @property
     def active_engine(self) -> str:
-        if self.inference_engine.strip():
-            return self.inference_engine.strip().lower()
+        configured_engine = self.inference_engine.strip().lower()
+        if configured_engine == "mock" and self.vllm_base_url and self.vllm_api_key:
+            return "vllm"
+        if configured_engine:
+            return configured_engine
         if self.vllm_base_url:
             return "vllm"
         if _ollama_model_installed(self.ollama_model):
@@ -127,6 +144,8 @@ class Settings:
             return self.public_model_id
         if self.active_engine == "ollama":
             return self.ollama_model
+        if self.active_engine == "vllm":
+            return self.vllm_model or self.public_model_id
         return self.public_model_id
 
     @property
@@ -137,6 +156,8 @@ class Settings:
             return self.base_model_id
         if self.active_engine == "ollama":
             return self.ollama_model
+        if self.active_engine == "vllm":
+            return self.vllm_model or self.base_model_id
         return self.base_model_id
 
     @property
@@ -168,6 +189,8 @@ class Settings:
                     errors.append(f"{label} does not exist: {path}")
         if self.active_engine == "vllm" and (not self.vllm_api_key or self.vllm_api_key == "medbrief-local"):
             errors.append("MEDBRIEF_VLLM_API_KEY is using the insecure default value")
+        if self.active_engine == "vllm" and not self.vllm_base_url:
+            errors.append("MEDBRIEF_VLLM_BASE_URL or LLM_PROVIDER_BASE_URL is required when using vLLM")
         if self.active_engine == "ollama":
             if not self.ollama_base_url:
                 errors.append("MEDBRIEF_OLLAMA_BASE_URL is required when using the ollama engine")

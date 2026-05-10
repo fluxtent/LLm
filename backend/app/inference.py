@@ -405,6 +405,18 @@ class VLLMChatEngine(BaseInferenceEngine):
         self._api_key = settings.vllm_api_key
         self._timeout = settings.request_timeout_seconds
         self._signing_secret = settings.vllm_signing_secret
+        self._default_model = settings.vllm_model or settings.public_model_id
+        self._public_model_id = settings.public_model_id
+
+    def _resolve_model(self, requested_model: str | None) -> str:
+        if not requested_model or requested_model == self._public_model_id:
+            return self._default_model
+        return requested_model
+
+    def _openai_path(self, suffix: str) -> str:
+        if self._base_url.endswith("/v1"):
+            return f"{self._base_url}/{suffix.lstrip('/')}"
+        return f"{self._base_url}/v1/{suffix.lstrip('/')}"
 
     def _headers(self, request_id: str) -> dict[str, str]:
         headers = {
@@ -434,8 +446,9 @@ class VLLMChatEngine(BaseInferenceEngine):
         profile: UserProfile | None = None,
     ) -> InferenceResult:
         started = time.perf_counter()
+        requested_model = self._resolve_model(model)
         payload = {
-            "model": model,
+            "model": requested_model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -455,7 +468,7 @@ class VLLMChatEngine(BaseInferenceEngine):
             try:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
                     response = await client.post(
-                        f"{self._base_url}/v1/chat/completions",
+                        self._openai_path("chat/completions"),
                         headers=self._headers(request_id),
                         json=payload,
                     )
@@ -466,7 +479,7 @@ class VLLMChatEngine(BaseInferenceEngine):
                     text=content,
                     finish_reason=data["choices"][0].get("finish_reason", "stop"),
                     latency_ms=int((time.perf_counter() - started) * 1000),
-                    upstream_model=data.get("model", model),
+                    upstream_model=data.get("model", requested_model),
                 )
             except Exception as exc:  # pragma: no cover - network path
                 last_error = exc
@@ -478,7 +491,7 @@ class VLLMChatEngine(BaseInferenceEngine):
         try:
             async with httpx.AsyncClient(timeout=2.5) as client:
                 response = await client.get(
-                    f"{self._base_url}/v1/models",
+                    self._openai_path("models"),
                     headers=self._headers("health-check"),
                 )
             return response.is_success

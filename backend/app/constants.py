@@ -70,7 +70,7 @@ MEDICATION_DOSING_RESPONSE = (
 )
 
 DEGRADED_MODE_RESPONSE = (
-    "MedBrief AI is taking a brief break. Please try again in a moment."
+    "The model backend is unavailable right now, so MedBrief AI will not fake a personalized answer. Please retry in a moment."
 )
 
 LOW_QUALITY_FALLBACK = (

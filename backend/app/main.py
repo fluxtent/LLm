@@ -22,7 +22,6 @@ from .personalization import (
     build_personalization_context,
     build_response_plan,
     evaluate_response_quality,
-    render_personalized_response,
 )
 from .profile_store import STORE
 from .prompting import PromptBundle, build_prompt_bundle, is_definition_request
@@ -315,52 +314,47 @@ async def _generate_completion(
     started = time.perf_counter()
 
     if safety_decision.allow_model:
-        if settings.active_engine == "mock":
-            response_text = render_personalized_response(response_plan)
-            upstream_model = settings.public_model_id
-            finish_reason = "stop"
-        else:
-            try:
-                inference = await engine.complete(
-                    messages=prompt_bundle.upstream_messages,
-                    model=request.model or settings.public_model_id,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    request_id=request_id,
-                    mode=prompt_bundle.mode,
-                    conversation_id=request.conversation_id,
-                    profile=profile,
-                )
-                response_text = inference.text
-                upstream_model = inference.upstream_model or settings.public_model_id
-                finish_reason = inference.finish_reason
-            except Exception:
-                fallback_used = True
-                if fallback_engine is not None:
-                    try:
-                        inference = await fallback_engine.complete(
-                            messages=prompt_bundle.upstream_messages,
-                            model=request.model or settings.public_model_id,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            top_p=top_p,
-                            request_id=request_id,
-                            mode=prompt_bundle.mode,
-                            conversation_id=request.conversation_id,
-                            profile=profile,
-                        )
-                        response_text = inference.text
-                        upstream_model = settings.public_model_id
-                        finish_reason = inference.finish_reason
-                    except Exception:
-                        response_text = render_personalized_response(response_plan)
-                        upstream_model = settings.public_model_id
-                        finish_reason = "stop"
-                else:
-                    response_text = render_personalized_response(response_plan)
+        try:
+            inference = await engine.complete(
+                messages=prompt_bundle.upstream_messages,
+                model=request.model or settings.public_model_id,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                request_id=request_id,
+                mode=prompt_bundle.mode,
+                conversation_id=request.conversation_id,
+                profile=profile,
+            )
+            response_text = inference.text
+            upstream_model = inference.upstream_model or settings.public_model_id
+            finish_reason = inference.finish_reason
+        except Exception:
+            fallback_used = True
+            if fallback_engine is not None:
+                try:
+                    inference = await fallback_engine.complete(
+                        messages=prompt_bundle.upstream_messages,
+                        model=request.model or settings.public_model_id,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        request_id=request_id,
+                        mode=prompt_bundle.mode,
+                        conversation_id=request.conversation_id,
+                        profile=profile,
+                    )
+                    response_text = inference.text
+                    upstream_model = settings.public_model_id
+                    finish_reason = inference.finish_reason
+                except Exception:
+                    response_text = degraded_mode_response()
                     upstream_model = settings.public_model_id
                     finish_reason = "stop"
+            else:
+                response_text = degraded_mode_response()
+                upstream_model = settings.public_model_id
+                finish_reason = "stop"
     else:
         response_text = safety_decision.response_text or degraded_mode_response()
         upstream_model = settings.public_model_id
@@ -406,11 +400,10 @@ async def _generate_completion(
                 upstream_model = retry_inference.upstream_model or upstream_model
                 finish_reason = retry_inference.finish_reason
             else:
-                cleaned = render_personalized_response(response_plan)
-                response_quality = evaluate_response_quality(cleaned, response_plan)
+                cleaned = degraded_mode_response()
+                response_quality = retry_quality
         except Exception:
-            cleaned = render_personalized_response(response_plan)
-            response_quality = evaluate_response_quality(cleaned, response_plan)
+            cleaned = degraded_mode_response()
     cleaned = clean_response_text(cleaned)
 
     user_id = request.metadata.get("user_id")
