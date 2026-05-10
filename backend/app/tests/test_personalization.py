@@ -277,6 +277,27 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("means the thing you are trying to pin down", text)
         self.assertIn("not have enough", text.lower())
 
+    async def test_purpose_question_gets_direct_answer_not_definition_shell(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="what is the purpose of anything")],
+            max_tokens=180,
+            stream=False,
+        )
+        engine = FakeEngine([])
+
+        _body, _telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(inference_engine="vllm"),
+            engine,
+            fallback_engine=LocalResponderEngine(),
+        )
+
+        self.assertIn("purpose", text.lower())
+        self.assertIn("depends", text.lower())
+        self.assertNotIn("fake a definition", text)
+        self.assertNotIn("canned sentence", text)
+
     async def test_runtime_can_still_raise_without_any_fallback(self) -> None:
         request = ChatCompletionRequest(
             messages=[ChatMessage(role="user", content="what is nephritis")],

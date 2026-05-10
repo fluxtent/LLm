@@ -370,6 +370,19 @@ def _medical_specialty_definition(subject: str) -> str:
 
 def _known_general_definition(subject: str) -> str:
     normalized = _normalize(subject).strip(" ?.!").replace("-", " ")
+    if normalized in {"purpose of anything", "purpose of everything"}:
+        return (
+            "The purpose of anything depends on what kind of thing it is. "
+            "A heart exists to move blood, a bridge exists to carry people across a gap, and a promise exists to hold trust between people. "
+            "If you mean life or existence as a whole, there may not be one assigned purpose waiting to be discovered; purpose is often made through what reduces suffering, creates connection, builds something real, or protects what matters."
+        )
+    if normalized.startswith("purpose of "):
+        target = normalized.removeprefix("purpose of ").strip()
+        if target:
+            return (
+                f"The purpose of {target} is the role it serves, not just what it is called. "
+                "A useful answer asks what it changes, who it helps or affects, and what would be missing if it did not exist."
+            )
     definitions = {
         "purpose": (
             "Purpose is the reason something matters or the role it serves. "
