@@ -71,6 +71,19 @@ class ModelUnavailableError(RuntimeError):
     """Raised when no real model answer passes availability and quality checks."""
 
 
+def _model_unavailable_message(exc: Exception) -> str:
+    detail = str(exc)
+    if "HTTP 403" in detail:
+        if "customer_verification_required" in detail:
+            return "model backend unavailable: Vercel AI Gateway returned HTTP 403 customer_verification_required"
+        return "model backend unavailable: Vercel AI Gateway returned HTTP 403"
+    if "HTTP 401" in detail:
+        return "model backend unavailable: upstream authentication failed"
+    if "timed out" in detail.lower() or "timeout" in detail.lower():
+        return "model backend unavailable: upstream request timed out"
+    return "model backend unavailable"
+
+
 def _count_tokens_rough(text: str) -> int:
     return max(1, len(text.split()))
 
@@ -333,7 +346,7 @@ async def _generate_completion(
             response_text = inference.text
             upstream_model = inference.upstream_model or settings.public_model_id
             finish_reason = inference.finish_reason
-        except Exception:
+        except Exception as exc:
             fallback_used = True
             if fallback_engine is not None:
                 try:
@@ -351,10 +364,10 @@ async def _generate_completion(
                     response_text = inference.text
                     upstream_model = settings.public_model_id
                     finish_reason = inference.finish_reason
-                except Exception:
-                    raise ModelUnavailableError("model backend unavailable") from None
+                except Exception as fallback_exc:
+                    raise ModelUnavailableError(_model_unavailable_message(fallback_exc)) from None
             else:
-                raise ModelUnavailableError("model backend unavailable") from None
+                raise ModelUnavailableError(_model_unavailable_message(exc)) from None
     else:
         response_text = safety_decision.response_text or degraded_mode_response()
         upstream_model = settings.public_model_id
@@ -422,9 +435,9 @@ async def _generate_completion(
                     raise ModelUnavailableError("local response failed quality checks")
                 upstream_model = fallback_inference.upstream_model or upstream_model
                 finish_reason = fallback_inference.finish_reason
-        except Exception:
+        except Exception as exc:
             if fallback_engine is None:
-                raise ModelUnavailableError("model backend unavailable during quality retry") from None
+                raise ModelUnavailableError(_model_unavailable_message(exc)) from None
             fallback_inference = await fallback_engine.complete(
                 messages=prompt_bundle.upstream_messages,
                 model=request.model or settings.public_model_id,
