@@ -744,13 +744,19 @@ class VLLMChatEngine(BaseInferenceEngine):
 
     def __init__(self, settings: Settings):
         self._base_url = settings.vllm_base_url.rstrip("/")
-        self._api_key = settings.vllm_api_key
+        self._is_vercel_ai_gateway = "ai-gateway.vercel.sh" in self._base_url
+        self._api_key = self._resolve_api_key(settings)
         self._timeout = settings.request_timeout_seconds
         self._signing_secret = settings.vllm_signing_secret
         self._default_model = settings.vllm_model or settings.public_model_id
         self._public_model_id = settings.public_model_id
         self._health_checked_at = 0.0
         self._health_ok = False
+
+    def _resolve_api_key(self, settings: Settings) -> str:
+        if self._is_vercel_ai_gateway:
+            return settings.ai_gateway_api_key or settings.vercel_oidc_token or settings.vllm_api_key
+        return settings.vllm_api_key
 
     def _resolve_model(self, requested_model: str | None) -> str:
         if not requested_model or requested_model == self._public_model_id:
@@ -798,13 +804,14 @@ class VLLMChatEngine(BaseInferenceEngine):
             "temperature": temperature,
             "top_p": top_p,
             "stream": False,
-            "extra_body": {
+        }
+        if not self._is_vercel_ai_gateway:
+            payload["extra_body"] = {
                 "mode": mode,
                 "request_id": request_id,
                 "conversation_id": conversation_id,
                 "preferences": profile.preferences.model_dump() if profile else None,
-            },
-        }
+            }
 
         delay = 0.5
         last_error: Exception | None = None
@@ -825,11 +832,17 @@ class VLLMChatEngine(BaseInferenceEngine):
                     latency_ms=int((time.perf_counter() - started) * 1000),
                     upstream_model=data.get("model", requested_model),
                 )
+            except httpx.HTTPStatusError as exc:  # pragma: no cover - network path
+                detail = re.sub(r"\s+", " ", exc.response.text).strip()[:500]
+                status = exc.response.status_code
+                last_error = RuntimeError(f"vLLM completion returned HTTP {status}: {detail}")
+                await asyncio.sleep(delay)
+                delay *= 2
             except Exception as exc:  # pragma: no cover - network path
                 last_error = exc
                 await asyncio.sleep(delay)
                 delay *= 2
-        raise RuntimeError("vLLM completion failed after retries") from last_error
+        raise RuntimeError(f"vLLM completion failed after retries: {last_error}") from last_error
 
     async def health(self) -> bool:
         now = time.time()

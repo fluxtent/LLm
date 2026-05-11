@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import json
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -70,7 +70,7 @@ def _ollama_model_installed(model_name: str) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    environment: str = _default_environment()
+    environment: str = field(default_factory=_default_environment)
     api_title: str = os.getenv("MEDBRIEF_API_TITLE", "MedBrief AI Gateway")
     release_version: str = os.getenv("MEDBRIEF_RELEASE_VERSION", "0.3.0")
     public_model_id: str = os.getenv("MEDBRIEF_MODEL_ID", "medbrief-phi3-med")
@@ -85,6 +85,8 @@ class Settings:
     vllm_api_key: str = os.getenv("MEDBRIEF_VLLM_API_KEY", os.getenv("LLM_PROVIDER_API_KEY", "medbrief-local"))
     vllm_model: str = _model_env("MEDBRIEF_VLLM_MODEL", _model_env("LLM_MODEL_BACKEND", DEFAULT_GATEWAY_MODEL_ID))
     vllm_signing_secret: str = os.getenv("MEDBRIEF_VLLM_SIGNING_SECRET", "")
+    ai_gateway_api_key: str = os.getenv("AI_GATEWAY_API_KEY", "")
+    vercel_oidc_token: str = os.getenv("VERCEL_OIDC_TOKEN", "")
     ollama_base_url: str = os.getenv("MEDBRIEF_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     ollama_model: str = os.getenv("MEDBRIEF_OLLAMA_MODEL", "phi3:mini")
     ollama_keep_alive: str = os.getenv("MEDBRIEF_OLLAMA_KEEP_ALIVE", "30m")
@@ -103,7 +105,13 @@ class Settings:
     custom_vocab_path: str = os.getenv("MEDBRIEF_CUSTOM_VOCAB_PATH", "vocab.json")
     custom_merges_path: str = os.getenv("MEDBRIEF_CUSTOM_MERGES_PATH", "merges.pkl")
     custom_allow_cpu: bool = _bool_env("MEDBRIEF_CUSTOM_ALLOW_CPU", True)
-    store_path: str = os.getenv("MEDBRIEF_STORE_PATH", _default_store_path())
+    allow_local_responder_fallback: bool = field(
+        default_factory=lambda: _bool_env(
+            "MEDBRIEF_ALLOW_LOCAL_RESPONDER_FALLBACK",
+            _default_environment().lower() != "production",
+        )
+    )
+    store_path: str = field(default_factory=lambda: os.getenv("MEDBRIEF_STORE_PATH", _default_store_path()))
     api_keys_enabled: bool = _bool_env("MEDBRIEF_API_KEYS_ENABLED", True)
     require_api_key: bool = _bool_env("MEDBRIEF_REQUIRE_API_KEY", False)
     admin_token: str = os.getenv("MEDBRIEF_ADMIN_TOKEN", "")
@@ -174,6 +182,10 @@ class Settings:
             errors.append(f"unsupported MEDBRIEF_INFERENCE_ENGINE: {self.active_engine}")
         if self.active_engine == "mock":
             errors.append("active_engine is mock - set MEDBRIEF_VLLM_BASE_URL or MEDBRIEF_INFERENCE_ENGINE")
+        if self.environment.lower() == "production" and self.allow_local_responder_fallback:
+            errors.append(
+                "MEDBRIEF_ALLOW_LOCAL_RESPONDER_FALLBACK must be false in production; scripted local fallback cannot stand in for the model"
+            )
         if self.active_engine == "openai":
             if not self.openai_api_key:
                 errors.append("MEDBRIEF_OPENAI_API_KEY or OPENAI_API_KEY is required when using the OpenAI engine")
@@ -187,7 +199,15 @@ class Settings:
             ):
                 if not Path(path).exists():
                     errors.append(f"{label} does not exist: {path}")
-        if self.active_engine == "vllm" and (not self.vllm_api_key or self.vllm_api_key == "medbrief-local"):
+        vllm_has_gateway_identity = (
+            "ai-gateway.vercel.sh" in self.vllm_base_url
+            and bool(self.ai_gateway_api_key or self.vercel_oidc_token)
+        )
+        if (
+            self.active_engine == "vllm"
+            and not vllm_has_gateway_identity
+            and (not self.vllm_api_key or self.vllm_api_key == "medbrief-local")
+        ):
             errors.append("MEDBRIEF_VLLM_API_KEY is using the insecure default value")
         if self.active_engine == "vllm" and not self.vllm_base_url:
             errors.append("MEDBRIEF_VLLM_BASE_URL or LLM_PROVIDER_BASE_URL is required when using vLLM")

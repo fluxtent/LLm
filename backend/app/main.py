@@ -490,7 +490,9 @@ def create_app() -> FastAPI:
         if errors:
             raise RuntimeError("Production config errors: " + "; ".join(errors))
     engine = create_inference_engine(settings)
-    fallback_engine: BaseInferenceEngine | None = LocalResponderEngine()
+    fallback_engine: BaseInferenceEngine | None = (
+        LocalResponderEngine() if settings.allow_local_responder_fallback else None
+    )
 
     app = FastAPI(title=settings.api_title, version=settings.release_version)
     app.add_middleware(

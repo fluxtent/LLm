@@ -24,9 +24,34 @@ class SettingsValidationTests(unittest.TestCase):
             inference_engine="vllm",
             vllm_base_url="http://127.0.0.1:8000",
             vllm_api_key="super-secret",
+            allow_local_responder_fallback=False,
         )
 
         self.assertEqual(settings.validate_for_production(), [])
+
+    def test_validate_for_production_rejects_local_responder_fallback(self) -> None:
+        settings = Settings(
+            environment="production",
+            inference_engine="vllm",
+            vllm_base_url="http://127.0.0.1:8000",
+            vllm_api_key="super-secret",
+            allow_local_responder_fallback=True,
+        )
+
+        errors = settings.validate_for_production()
+
+        self.assertTrue(any("scripted local fallback" in error for error in errors))
+
+    def test_vercel_defaults_disable_local_responder_fallback(self) -> None:
+        with patch.dict("os.environ", {"VERCEL": "1"}, clear=False):
+            settings = Settings(
+                inference_engine="vllm",
+                vllm_base_url="http://127.0.0.1:8000",
+                vllm_api_key="super-secret",
+            )
+
+        self.assertEqual(settings.environment, "production")
+        self.assertFalse(settings.allow_local_responder_fallback)
 
     def test_legacy_provider_env_overrides_mock_engine(self) -> None:
         settings = Settings(
@@ -35,6 +60,7 @@ class SettingsValidationTests(unittest.TestCase):
             vllm_base_url="https://provider.example",
             vllm_api_key="super-secret",
             vllm_model="microsoft/Phi-3-mini-4k-instruct",
+            allow_local_responder_fallback=False,
         )
 
         self.assertEqual(settings.active_engine, "vllm")
@@ -65,6 +91,31 @@ class SettingsValidationTests(unittest.TestCase):
             engine._openai_path("chat/completions"),
             "https://provider.example/v1/chat/completions",
         )
+
+    def test_vercel_ai_gateway_prefers_oidc_over_legacy_provider_key(self) -> None:
+        settings = Settings(
+            inference_engine="vllm",
+            vllm_base_url="https://ai-gateway.vercel.sh/v1",
+            vllm_api_key="legacy-provider-key",
+            ai_gateway_api_key="",
+            vercel_oidc_token="oidc-token",
+        )
+        engine = VLLMChatEngine(settings)
+
+        self.assertEqual(engine._api_key, "oidc-token")
+
+    def test_vercel_ai_gateway_accepts_oidc_without_legacy_provider_key(self) -> None:
+        settings = Settings(
+            environment="production",
+            inference_engine="vllm",
+            vllm_base_url="https://ai-gateway.vercel.sh/v1",
+            vllm_api_key="medbrief-local",
+            ai_gateway_api_key="",
+            vercel_oidc_token="oidc-token",
+            allow_local_responder_fallback=False,
+        )
+
+        self.assertEqual(settings.validate_for_production(), [])
 
     def test_default_engine_uses_local_ollama_when_available(self) -> None:
         with patch("backend.app.settings._ollama_model_installed", return_value=True):
