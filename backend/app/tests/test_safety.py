@@ -16,6 +16,13 @@ class CrisisDetectionTests(unittest.TestCase):
         self.assertEqual(decision.safety_flag, "crisis_intercept")
         self.assertIn("988", decision.response_text)
 
+    def test_wanna_end_it_triggers_intercept_without_model(self) -> None:
+        decision = evaluate_request("general", "i wanna end it")
+
+        self.assertFalse(decision.allow_model)
+        self.assertEqual(decision.safety_flag, "crisis_intercept")
+        self.assertIn("988", decision.response_text)
+
     def test_keyword_plus_distress_signal_triggers_intercept(self) -> None:
         self.assertTrue(is_crisis("what's the point anymore when I feel so alone"))
 

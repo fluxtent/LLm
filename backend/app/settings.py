@@ -99,6 +99,10 @@ class Settings:
     default_temperature: float = float(os.getenv("MEDBRIEF_DEFAULT_TEMPERATURE", "0.65"))
     default_top_p: float = float(os.getenv("MEDBRIEF_DEFAULT_TOP_P", "0.92"))
     stream_default: bool = _bool_env("MEDBRIEF_STREAM_DEFAULT", True)
+    model_failover_enabled: bool = _bool_env("MEDBRIEF_MODEL_FAILOVER_ENABLED", True)
+    model_failover_order: tuple[str, ...] = field(
+        default_factory=lambda: _list_env("MEDBRIEF_MODEL_FAILOVER_ORDER", "vllm,ollama,custom,openai")
+    )
     gpu_type: str = os.getenv("MEDBRIEF_GPU_TYPE", "L4")
     runtime_config_api_base: str = os.getenv("MEDBRIEF_RUNTIME_API_BASE", "")
     custom_model_path: str = os.getenv("MEDBRIEF_CUSTOM_MODEL_PATH", "model.pth")

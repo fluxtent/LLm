@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from backend.app.inference import BaseInferenceEngine, InferenceResult, LocalResponderEngine
+from backend.app.inference import BaseInferenceEngine, InferenceResult, LocalResponderEngine, ResilientInferenceEngine
 from backend.app.main import ModelUnavailableError, _generate_completion
 from backend.app.personalization import (
     apply_memory_updates,
@@ -38,6 +38,17 @@ class FakeEngine(BaseInferenceEngine):
         else:
             text = "The important part is repeated again. Tell me what outcome you want."
         return InferenceResult(text=text, upstream_model="fake-local-llm")
+
+
+class FailingEngine(BaseInferenceEngine):
+    name = "failing"
+
+    async def complete(self, **kwargs) -> InferenceResult:
+        del kwargs
+        raise RuntimeError("primary unavailable")
+
+    async def health(self) -> bool:
+        return False
 
 
 class PersonalizationPlanningTests(unittest.TestCase):
@@ -337,6 +348,54 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Hello", text)
         self.assertNotIn("practical layer", text)
         self.assertEqual(telemetry["engine"], "mock")
+
+    async def test_resilient_engine_fails_over_to_second_generative_engine(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="what is nephrology")],
+            max_tokens=120,
+            stream=False,
+        )
+        engine = ResilientInferenceEngine(
+            [
+                FailingEngine(),
+                FakeEngine(
+                    [
+                        "Nephrology is kidney medicine, focused on kidney function, kidney disease, dialysis, and blood-pressure problems connected to the kidneys.",
+                        "Nephrology is the medical field focused on kidneys: how they filter blood, regulate fluids, and develop diseases that need long-term care.",
+                    ]
+                ),
+            ]
+        )
+
+        _body, telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(inference_engine="vllm"),
+            engine,
+            fallback_engine=None,
+        )
+
+        self.assertIn("kidney", text.lower())
+        self.assertIn("failover", _body["model"])
+        self.assertFalse(telemetry["fallback_flag"])
+
+    async def test_crisis_intercept_does_not_need_model_backend(self) -> None:
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="i wanna end it")],
+            max_tokens=120,
+            stream=False,
+        )
+
+        _body, telemetry, text = await _generate_completion(
+            SimpleNamespace(client=None),
+            request,
+            Settings(inference_engine="vllm"),
+            FailingEngine(),
+            fallback_engine=None,
+        )
+
+        self.assertIn("988", text)
+        self.assertEqual(telemetry["safety_flag"], "crisis_intercept")
 
     async def test_runtime_does_not_redact_user_language_in_model_answer(self) -> None:
         request = ChatCompletionRequest(

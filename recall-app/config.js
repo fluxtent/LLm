@@ -109,6 +109,8 @@ SCOPE HONESTY:
 
   CRISIS_KEYWORDS: [
     'kill myself', 'want to die', 'end my life', 'suicide', 'suicidal',
+    'i want to end it', 'i wanna end it', 'i\'m going to end it',
+    'im going to end it', 'going to end it',
     'self-harm', 'self harm', 'cutting myself', 'hurt myself',
     'don\'t want to be alive', 'no reason to live', 'better off dead',
     'can\'t go on', 'end it all', 'take my life', 'not worth living',
@@ -124,6 +126,8 @@ SCOPE HONESTY:
 
   CRISIS_HIGH_CONFIDENCE_KEYWORDS: [
     'kill myself', 'want to die', 'end my life', 'suicide', 'suicidal',
+    'i want to end it', 'i wanna end it', 'i\'m going to end it',
+    'im going to end it', 'going to end it', 'end it all',
     'self-harm', 'self harm', 'hurt myself', 'better off dead',
     'no reason to live', 'nothing to live for', 'can\'t go on',
     'cannot go on', 'don\'t know how to go on', 'dont know how to go on',

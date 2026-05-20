@@ -215,17 +215,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function describeRequestError(error) {
     const base = (error?.message || '').trim() || 'Something went wrong - please try again.';
+    if (/model backend unavailable|ai gateway|customer_verification_required|upstream/i.test(base)) {
+      return 'The model connection is unavailable right now. MedBrief did not generate a fake answer.';
+    }
     const requestId = error?.requestId ? ` Request ID: ${error.requestId}.` : '';
     return `${base}${requestId}`;
   }
 
   function appendRequestError(error) {
+    const message = describeRequestError(error);
+    const isModelUnavailable = /model connection is unavailable/i.test(message);
     const el = document.createElement('div');
     el.className = 'request-error';
     el.innerHTML = `
       <div class="request-error-copy">
-        <strong>Something went wrong.</strong>
-        <span>${escapeHtml(describeRequestError(error))}</span>
+        <strong>${isModelUnavailable ? 'Model connection unavailable.' : 'Something went wrong.'}</strong>
+        <span>${escapeHtml(message)}</span>
       </div>
     `;
 

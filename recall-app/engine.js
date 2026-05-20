@@ -78,6 +78,23 @@ class RecallEngine {
     return 'general';
   }
 
+  crisisResponse() {
+    return [
+      "I'm really glad you said that here instead of staying alone with it. If you might hurt yourself or you do not feel safe right now, call or text 988 in the US now, or call local emergency services if there is immediate danger.",
+      "If you can, move away from anything you could use to hurt yourself and get near another person: a family member, friend, neighbor, RA, teacher, or front desk. Say this plainly: \"I might not be safe alone right now.\"",
+      "You do not have to explain your whole life first. The next step is staying alive through the next few minutes and getting a real person with you."
+    ].join("\n\n");
+  }
+
+  completeLocally(conversationId, content, onChunk, onComplete) {
+    return new Promise(resolve => {
+      this.typeResponse(content, conversationId, true, onChunk, (fullContent) => {
+        onComplete(fullContent);
+        resolve();
+      });
+    });
+  }
+
   modeTag(mode) {
     const safeMode = (mode || 'general').toUpperCase();
     return `[MODE:${safeMode}]`;
@@ -271,6 +288,13 @@ class RecallEngine {
 
     if (persistUserMessage) {
       this.memory.addMessage(conversationId, 'user', userMessage);
+    }
+
+    if (isCrisis) {
+      const content = this.crisisResponse();
+      await this.completeLocally(conversationId, content, onChunk, onComplete);
+      await this.maybeSummarizeConversation(conversationId);
+      return;
     }
 
     const messages = this.buildRequestMessages(conversationId, userMessage, mode, isCrisis);

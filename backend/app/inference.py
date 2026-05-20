@@ -868,13 +868,82 @@ class VLLMChatEngine(BaseInferenceEngine):
         return self._health_ok
 
 
-def create_inference_engine(settings: Settings) -> BaseInferenceEngine:
-    if settings.active_engine == "custom":
+class ResilientInferenceEngine(BaseInferenceEngine):
+    name = "resilient"
+
+    def __init__(self, engines: list[BaseInferenceEngine]):
+        if not engines:
+            raise ValueError("at least one inference engine is required")
+        self._engines = engines
+
+    @property
+    def engine_names(self) -> list[str]:
+        return [engine.name for engine in self._engines]
+
+    async def complete(self, **kwargs: Any) -> InferenceResult:
+        last_error: Exception | None = None
+        for index, engine in enumerate(self._engines):
+            try:
+                result = await engine.complete(**kwargs)
+                if result.text.strip():
+                    upstream = result.upstream_model or engine.name
+                    if index > 0:
+                        upstream = f"{upstream};failover={engine.name}"
+                    return InferenceResult(
+                        text=result.text,
+                        finish_reason=result.finish_reason,
+                        latency_ms=result.latency_ms,
+                        upstream_model=upstream,
+                    )
+                last_error = RuntimeError(f"{engine.name} returned an empty response")
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(f"all generative model engines failed: {last_error}") from last_error
+
+    async def health(self) -> bool:
+        for engine in self._engines:
+            try:
+                if await engine.health():
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def warmup(self) -> None:
+        await asyncio.gather(*(engine.warmup() for engine in self._engines), return_exceptions=True)
+
+
+def _engine_for_name(settings: Settings, name: str) -> BaseInferenceEngine | None:
+    if name == "custom":
         return CustomMedBriefEngine(settings)
-    if settings.active_engine == "openai":
+    if name == "openai" and settings.openai_api_key:
         return OpenAIChatEngine(settings)
-    if settings.active_engine == "ollama":
+    if name == "ollama":
         return OllamaChatEngine(settings)
-    if settings.active_engine == "vllm":
+    if name == "vllm" and settings.vllm_base_url:
         return VLLMChatEngine(settings)
-    return MockInferenceEngine()
+    if name == "mock" and settings.active_engine == "mock":
+        return MockInferenceEngine()
+    return None
+
+
+def create_inference_engine(settings: Settings) -> BaseInferenceEngine:
+    primary = _engine_for_name(settings, settings.active_engine) or MockInferenceEngine()
+    if not settings.model_failover_enabled or settings.active_engine == "mock":
+        return primary
+
+    engines = [primary]
+    seen = {primary.name}
+    for engine_name in settings.model_failover_order:
+        normalized = engine_name.strip().lower()
+        if not normalized or normalized in seen or normalized == settings.active_engine:
+            continue
+        engine = _engine_for_name(settings, normalized)
+        if engine is None or engine.name in seen:
+            continue
+        engines.append(engine)
+        seen.add(engine.name)
+
+    if len(engines) == 1:
+        return primary
+    return ResilientInferenceEngine(engines)
