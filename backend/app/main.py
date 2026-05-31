@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .constants import FRONTEND_FEATURE_FLAGS, PRIVACY_DISCLAIMER, SUPPORTED_MODES
@@ -170,6 +170,29 @@ def _summarize_messages(messages: list[dict[str, str]]) -> str:
         f"Last assistant direction: {helpful_response}. "
         "Use this only when it helps continuity; do not claim details the user did not provide."
     )
+
+
+def _latest_user_prompt(request: ChatCompletionRequest) -> str:
+    return next(message.content for message in reversed(request.messages) if message.role == "user")
+
+
+def _training_export_line(event: dict[str, object]) -> str:
+    payload = {
+        "messages": [
+            {"role": "user", "content": event.get("prompt", "")},
+            {"role": "assistant", "content": event.get("response", "")},
+        ],
+        "metadata": {
+            "mode": event.get("mode"),
+            "source": event.get("source"),
+            "model": event.get("model"),
+            "safety_flag": event.get("safety_flag"),
+            "created_at": event.get("created_at"),
+            "request_id": event.get("request_id"),
+            "conversation_id": event.get("conversation_id"),
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 async def _stream_sanitized_text(
@@ -492,6 +515,18 @@ async def _generate_completion(
         "personalization_intent": response_plan.understanding.user_intent,
         "personalization_emotion": response_plan.understanding.emotional_state,
     }
+    if settings.learning_capture_enabled:
+        STORE.add_learning_event(
+            prompt=_latest_user_prompt(request),
+            response=cleaned,
+            mode=prompt_bundle.mode,
+            user_id=request.metadata.get("user_id") if isinstance(request.metadata.get("user_id"), str) else None,
+            conversation_id=request.conversation_id,
+            request_id=request_id,
+            model=upstream_model,
+            safety_flag=safety_decision.safety_flag,
+            trainable=safety_decision.allow_model and prompt_bundle.mode != "crisis",
+        )
     _store_cached_completion(cache_key, response_body, cleaned)
     return response_body, telemetry, cleaned
 
@@ -611,6 +646,7 @@ def create_app() -> FastAPI:
                 "feedback": "/v1/feedback",
                 "memory_summarize": "/v1/memory/summarize",
                 "session_init": "/v1/session/init",
+                "training_export": "/v1/training/export",
                 "api_keys": "/api/keys",
             },
         }
@@ -681,6 +717,23 @@ def create_app() -> FastAPI:
         count = STORE.add_feedback(payload)
         emit_event("feedback_received", user_id=payload.user_id, rating=payload.rating, mode=payload.mode)
         return FeedbackResponse(stored=True, feedback_count=count)
+
+    @app.get("/v1/training/export")
+    async def export_training_data(
+        request: Request,
+        trainable_only: bool = True,
+        format: str = "jsonl",
+    ) -> Response:
+        _rate_limit_or_raise(request, "training_export", limit=10, window_seconds=60)
+        _allow_api_key_management_or_raise(request, settings)
+        events = STORE.export_learning_events(trainable_only=trainable_only)
+        if format.lower() == "json":
+            return JSONResponse(content={"count": len(events), "data": events})
+        lines = [_training_export_line(event) for event in events]
+        body = "\n".join(lines)
+        if body:
+            body += "\n"
+        return PlainTextResponse(content=body, media_type="application/x-ndjson")
 
     @app.delete("/v1/user/{user_id}", response_model=DeleteUserResponse)
     async def delete_user(user_id: str, request: Request) -> DeleteUserResponse:

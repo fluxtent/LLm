@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from backend.app.inference import VLLMChatEngine
+from backend.app.inference import UnavailableInferenceEngine, VLLMChatEngine, create_inference_engine
 from backend.app.settings import Settings
 
 
@@ -41,6 +41,14 @@ class SettingsValidationTests(unittest.TestCase):
         errors = settings.validate_for_production()
 
         self.assertTrue(any("scripted local fallback" in error for error in errors))
+
+    def test_self_run_defaults_disable_scripted_fallback_and_external_failover(self) -> None:
+        settings = Settings()
+
+        self.assertFalse(settings.allow_local_responder_fallback)
+        self.assertTrue(settings.strict_model_backend)
+        self.assertNotIn("openai", settings.model_failover_order)
+        self.assertFalse(settings.allow_external_openai)
 
     def test_vercel_defaults_disable_local_responder_fallback(self) -> None:
         with patch.dict("os.environ", {"VERCEL": "1"}, clear=False):
@@ -158,8 +166,24 @@ class SettingsValidationTests(unittest.TestCase):
             inference_engine="openai",
             openai_api_key="sk-test",
             openai_model="gpt-5.4-mini",
+            allow_external_openai=True,
             vllm_base_url="",
         )
 
         self.assertEqual(settings.active_engine, "openai")
         self.assertEqual(settings.runtime_model_id, "gpt-5.4-mini")
+
+    def test_openai_engine_is_unavailable_until_external_opt_in(self) -> None:
+        settings = Settings(
+            inference_engine="openai",
+            openai_api_key="sk-test",
+            openai_model="gpt-5.4-mini",
+            vllm_base_url="",
+            model_failover_enabled=False,
+        )
+
+        engine = create_inference_engine(settings)
+        errors = settings.validate_for_production()
+
+        self.assertIsInstance(engine, UnavailableInferenceEngine)
+        self.assertTrue(any("external OpenAI engine is disabled" in error for error in errors))

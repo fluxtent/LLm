@@ -18,3 +18,12 @@ python training/scripts/validate_dataset.py
 python training/scripts/sft_train.py --smoke
 python training/scripts/evaluate_release.py --api-base-url http://127.0.0.1:8001
 ```
+
+The backend can also capture local chat interactions as reviewable training candidates:
+
+```bash
+curl http://127.0.0.1:8001/v1/training/export ^
+  -H "X-MedBrief-Admin-Token: <admin-token>" > training/data/local_interactions.jsonl
+```
+
+Review and filter exported examples before mixing them into supervised fine-tuning or preference training. The chat service records candidates; it does not update model weights live during medical or mental-health conversations.

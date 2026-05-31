@@ -35,6 +35,7 @@ class MemoryStore:
     profiles: dict[str, UserProfile] = field(default_factory=dict)
     session_summaries: dict[tuple[str, str], str] = field(default_factory=dict)
     feedback: list[dict] = field(default_factory=list)
+    learning_events: list[dict[str, Any]] = field(default_factory=list)
     api_keys: dict[str, dict[str, Any]] = field(default_factory=dict)
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
@@ -74,6 +75,9 @@ class MemoryStore:
             self.session_summaries = summaries
 
             self.feedback = [item for item in data.get("feedback", []) if isinstance(item, dict)]
+            self.learning_events = [
+                item for item in data.get("learning_events", []) if isinstance(item, dict)
+            ]
             self.api_keys = {
                 item["id"]: item
                 for item in data.get("api_keys", [])
@@ -98,6 +102,7 @@ class MemoryStore:
                     for (user_id, session_id), summary in self.session_summaries.items()
                 ],
                 "feedback": self.feedback,
+                "learning_events": self.learning_events,
                 "api_keys": list(self.api_keys.values()),
             }
             try:
@@ -148,10 +153,54 @@ class MemoryStore:
             self.save()
             return len(self.feedback)
 
+    def add_learning_event(
+        self,
+        *,
+        prompt: str,
+        response: str,
+        mode: str,
+        user_id: str | None,
+        conversation_id: str | None,
+        request_id: str,
+        model: str,
+        safety_flag: str,
+        trainable: bool,
+    ) -> int:
+        event = {
+            "id": secrets.token_hex(8),
+            "created_at": int(time.time()),
+            "source": "chat",
+            "prompt": prompt.strip(),
+            "response": response.strip(),
+            "mode": mode,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "request_id": request_id,
+            "model": model,
+            "safety_flag": safety_flag,
+            "trainable": trainable,
+        }
+        with self._lock:
+            self.learning_events.append(event)
+            self.save()
+            return len(self.learning_events)
+
+    def export_learning_events(self, trainable_only: bool = True) -> list[dict[str, Any]]:
+        with self._lock:
+            events = [
+                deepcopy(event)
+                for event in self.learning_events
+                if not trainable_only or event.get("trainable")
+            ]
+        return sorted(events, key=lambda item: item.get("created_at", 0))
+
     def delete_user(self, user_id: str) -> None:
         with self._lock:
             self.profiles.pop(user_id, None)
             self.feedback = [item for item in self.feedback if item.get("user_id") != user_id]
+            self.learning_events = [
+                item for item in self.learning_events if item.get("user_id") != user_id
+            ]
             self.session_summaries = {
                 key: value for key, value in self.session_summaries.items() if key[0] != user_id
             }

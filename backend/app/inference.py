@@ -95,6 +95,32 @@ class MockInferenceEngine(BaseInferenceEngine):
         )
 
 
+class UnavailableInferenceEngine(BaseInferenceEngine):
+    name = "unavailable"
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    async def complete(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        request_id: str,
+        mode: str,
+        conversation_id: str | None = None,
+        profile: UserProfile | None = None,
+    ) -> InferenceResult:
+        del messages, model, max_tokens, temperature, top_p, request_id, mode, conversation_id, profile
+        raise RuntimeError(self.reason)
+
+    async def health(self) -> bool:
+        return False
+
+
 class LocalResponderEngine(BaseInferenceEngine):
     name = "local-responder"
 
@@ -916,7 +942,7 @@ class ResilientInferenceEngine(BaseInferenceEngine):
 def _engine_for_name(settings: Settings, name: str) -> BaseInferenceEngine | None:
     if name == "custom":
         return CustomMedBriefEngine(settings)
-    if name == "openai" and settings.openai_api_key:
+    if name == "openai" and settings.openai_api_key and settings.allow_external_openai:
         return OpenAIChatEngine(settings)
     if name == "ollama":
         return OllamaChatEngine(settings)
@@ -928,7 +954,14 @@ def _engine_for_name(settings: Settings, name: str) -> BaseInferenceEngine | Non
 
 
 def create_inference_engine(settings: Settings) -> BaseInferenceEngine:
-    primary = _engine_for_name(settings, settings.active_engine) or MockInferenceEngine()
+    primary = _engine_for_name(settings, settings.active_engine)
+    if primary is None:
+        if settings.active_engine == "mock" or not settings.strict_model_backend:
+            primary = MockInferenceEngine()
+        elif settings.active_engine == "openai" and not settings.allow_external_openai:
+            primary = UnavailableInferenceEngine("external OpenAI engine is disabled for this self-run backend")
+        else:
+            primary = UnavailableInferenceEngine(f"no self-hosted model engine is configured for {settings.active_engine}")
     if not settings.model_failover_enabled or settings.active_engine == "mock":
         return primary
 

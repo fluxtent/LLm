@@ -4,7 +4,7 @@ MedBrief AI now follows the guide-aligned FastAPI gateway in `backend/app/` toge
 
 ## Runtime Paths
 
-- `backend/app/`: authoritative FastAPI gateway, safety layer, prompt assembly, persistent profile memory, API keys, and inference engine selection
+- `backend/app/`: authoritative FastAPI gateway, safety layer, prompt assembly, persistent profile memory, local learning export, API keys, and inference engine selection
 - `recall-app/`: public frontend with runtime config, memory continuity, and crisis support UI
 - Root training files (`bpe.py`, `preprocess.py`, `model.py`, `train.py`, `generate.py`, `eval.py`): the custom MedBrief model, tokenizer, training, evaluation, and local inference stack
 - `legacy/`: archived older checkpoints and scripts
@@ -48,6 +48,7 @@ Then open [http://127.0.0.1:3004/index.html](http://127.0.0.1:3004/index.html). 
 - `POST /v1/memory/summarize`
 - `POST /v1/session/init`
 - `POST /v1/feedback`
+- `GET /v1/training/export`
 - `POST /api/keys`
 - `GET /api/keys`
 - `DELETE /api/keys/{key_id}`
@@ -59,8 +60,8 @@ Streaming uses SSE and is enabled by default in the frontend.
 - Frontend: Vercel static hosting
 - Backend: FastAPI gateway on Railway, Render, or Modal
 - Real-model path: the local MedBrief transformer checkpoint in `model.pth`
-- Optional deployment path: host the MedBrief model behind vLLM/Ollama if you package it that way
-- Fallback path: profile-aware template engine for demo mode and runtime failure resilience
+- Optional self-hosted deployment path: host an open-weight model behind vLLM or Ollama
+- Fallback path: disabled by default; MedBrief should not fake personalized intelligence with scripted responses
 
 Suggested local environment variables for the custom local model:
 
@@ -70,6 +71,9 @@ MEDBRIEF_INFERENCE_ENGINE=custom
 MEDBRIEF_CUSTOM_MODEL_PATH=model.pth
 MEDBRIEF_CUSTOM_VOCAB_PATH=vocab.json
 MEDBRIEF_CUSTOM_MERGES_PATH=merges.pkl
+MEDBRIEF_ALLOW_LOCAL_RESPONDER_FALLBACK=false
+MEDBRIEF_STRICT_MODEL_BACKEND=true
+MEDBRIEF_LEARNING_CAPTURE_ENABLED=true
 ```
 
 Developer API keys can be generated from the Settings panel or with:
@@ -81,3 +85,12 @@ curl -X POST http://127.0.0.1:8001/api/keys ^
 ```
 
 Then call MedBrief's OpenAI-compatible chat endpoint with `Authorization: Bearer <generated-key>`. These are MedBrief API keys for your own backend; they are not OpenAI keys.
+
+To export locally captured prompt/response pairs for review and future fine-tuning:
+
+```bash
+curl http://127.0.0.1:8001/v1/training/export ^
+  -H "X-MedBrief-Admin-Token: <admin-token>"
+```
+
+The app learns immediately through local memory/profile state and captures interactions for later local training. It does not perform unsafe live weight updates during a medical or mental-health chat.

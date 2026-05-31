@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .constants import FRONTEND_FEATURE_FLAGS
 
-DEFAULT_GATEWAY_MODEL_ID = "meta/llama-3.3-70b"
+DEFAULT_SELF_HOSTED_MODEL_ID = "medbrief-local-llm"
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -80,10 +80,14 @@ class Settings:
     inference_engine: str = os.getenv("MEDBRIEF_INFERENCE_ENGINE", "")
     openai_api_key: str = os.getenv("MEDBRIEF_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
     openai_base_url: str = os.getenv("MEDBRIEF_OPENAI_BASE_URL", "https://api.openai.com")
-    openai_model: str = os.getenv("MEDBRIEF_OPENAI_MODEL", "gpt-5.4-mini")
+    allow_external_openai: bool = _bool_env("MEDBRIEF_ALLOW_EXTERNAL_OPENAI", False)
+    openai_model: str = os.getenv("MEDBRIEF_OPENAI_MODEL", "")
     vllm_base_url: str = os.getenv("MEDBRIEF_VLLM_BASE_URL", os.getenv("LLM_PROVIDER_BASE_URL", ""))
     vllm_api_key: str = os.getenv("MEDBRIEF_VLLM_API_KEY", os.getenv("LLM_PROVIDER_API_KEY", "medbrief-local"))
-    vllm_model: str = _model_env("MEDBRIEF_VLLM_MODEL", _model_env("LLM_MODEL_BACKEND", DEFAULT_GATEWAY_MODEL_ID))
+    vllm_model: str = _model_env(
+        "MEDBRIEF_VLLM_MODEL",
+        _model_env("LLM_MODEL_BACKEND", DEFAULT_SELF_HOSTED_MODEL_ID),
+    )
     vllm_signing_secret: str = os.getenv("MEDBRIEF_VLLM_SIGNING_SECRET", "")
     ai_gateway_api_key: str = os.getenv("AI_GATEWAY_API_KEY", "")
     vercel_oidc_token: str = os.getenv("VERCEL_OIDC_TOKEN", "")
@@ -101,7 +105,7 @@ class Settings:
     stream_default: bool = _bool_env("MEDBRIEF_STREAM_DEFAULT", True)
     model_failover_enabled: bool = _bool_env("MEDBRIEF_MODEL_FAILOVER_ENABLED", True)
     model_failover_order: tuple[str, ...] = field(
-        default_factory=lambda: _list_env("MEDBRIEF_MODEL_FAILOVER_ORDER", "vllm,ollama,custom,openai")
+        default_factory=lambda: _list_env("MEDBRIEF_MODEL_FAILOVER_ORDER", "vllm,ollama,custom")
     )
     gpu_type: str = os.getenv("MEDBRIEF_GPU_TYPE", "L4")
     runtime_config_api_base: str = os.getenv("MEDBRIEF_RUNTIME_API_BASE", "")
@@ -112,9 +116,11 @@ class Settings:
     allow_local_responder_fallback: bool = field(
         default_factory=lambda: _bool_env(
             "MEDBRIEF_ALLOW_LOCAL_RESPONDER_FALLBACK",
-            _default_environment().lower() != "production",
+            False,
         )
     )
+    strict_model_backend: bool = _bool_env("MEDBRIEF_STRICT_MODEL_BACKEND", True)
+    learning_capture_enabled: bool = _bool_env("MEDBRIEF_LEARNING_CAPTURE_ENABLED", True)
     store_path: str = field(default_factory=lambda: os.getenv("MEDBRIEF_STORE_PATH", _default_store_path()))
     api_keys_enabled: bool = _bool_env("MEDBRIEF_API_KEYS_ENABLED", True)
     require_api_key: bool = _bool_env("MEDBRIEF_REQUIRE_API_KEY", False)
@@ -191,6 +197,8 @@ class Settings:
                 "MEDBRIEF_ALLOW_LOCAL_RESPONDER_FALLBACK must be false in production; scripted local fallback cannot stand in for the model"
             )
         if self.active_engine == "openai":
+            if not self.allow_external_openai:
+                errors.append("external OpenAI engine is disabled; set MEDBRIEF_ALLOW_EXTERNAL_OPENAI=true to opt in")
             if not self.openai_api_key:
                 errors.append("MEDBRIEF_OPENAI_API_KEY or OPENAI_API_KEY is required when using the OpenAI engine")
             if not self.openai_model:

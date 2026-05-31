@@ -51,6 +51,10 @@ class FailingEngine(BaseInferenceEngine):
         return False
 
 
+def runtime_settings(**overrides) -> Settings:
+    return Settings(learning_capture_enabled=False, **overrides)
+
+
 class PersonalizationPlanningTests(unittest.TestCase):
     def test_confusion_gets_next_step_understanding(self) -> None:
         plan = plan_for([("user", "i just dont know what to do")])
@@ -215,7 +219,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(),
+            runtime_settings(),
             engine,
             fallback_engine=LocalResponderEngine(),
         )
@@ -237,7 +241,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(inference_engine="vllm"),
+            runtime_settings(inference_engine="vllm"),
             engine,
             fallback_engine=LocalResponderEngine(),
         )
@@ -258,7 +262,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(inference_engine="vllm"),
+            runtime_settings(inference_engine="vllm"),
             engine,
             fallback_engine=LocalResponderEngine(),
         )
@@ -280,7 +284,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, _telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(inference_engine="vllm"),
+            runtime_settings(inference_engine="vllm"),
             engine,
             fallback_engine=LocalResponderEngine(),
         )
@@ -299,7 +303,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, _telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(inference_engine="vllm"),
+            runtime_settings(inference_engine="vllm"),
             engine,
             fallback_engine=LocalResponderEngine(),
         )
@@ -320,7 +324,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await _generate_completion(
                 SimpleNamespace(client=None),
                 request,
-                Settings(inference_engine="vllm"),
+                runtime_settings(inference_engine="vllm"),
                 FakeEngine([]),
                 fallback_engine=None,
             )
@@ -340,7 +344,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(inference_engine="mock"),
+            runtime_settings(inference_engine="mock"),
             engine,
             fallback_engine=None,
         )
@@ -370,7 +374,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(inference_engine="vllm"),
+            runtime_settings(inference_engine="vllm"),
             engine,
             fallback_engine=None,
         )
@@ -389,7 +393,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(inference_engine="vllm"),
+            runtime_settings(inference_engine="vllm"),
             FailingEngine(),
             fallback_engine=None,
         )
@@ -412,7 +416,7 @@ class PersonalizationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         _body, _telemetry, text = await _generate_completion(
             SimpleNamespace(client=None),
             request,
-            Settings(),
+            runtime_settings(),
             engine,
             fallback_engine=None,
         )
