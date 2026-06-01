@@ -58,10 +58,21 @@ Streaming uses SSE and is enabled by default in the frontend.
 ## Deployment Direction
 
 - Frontend: Vercel static hosting
-- Backend: FastAPI gateway on Railway, Render, or Modal
+- Global app/API entrypoint: Vercel
+- Self-run model backend: FastAPI gateway on Modal, Railway, Render, or a GPU server
 - Real-model path: the local MedBrief transformer checkpoint in `model.pth`
 - Optional self-hosted deployment path: host an open-weight model behind vLLM or Ollama
 - Fallback path: disabled by default; MedBrief should not fake personalized intelligence with scripted responses
+
+## Universal Deployment
+
+For a worldwide product, do not point Vercel at `localhost` or a laptop Ollama process. Deploy one self-run MedBrief backend with a public HTTPS URL, then set this on Vercel:
+
+```bash
+MEDBRIEF_REMOTE_BACKEND_URL=https://your-self-hosted-medbrief-backend.example
+```
+
+With that variable set, Vercel becomes the global public edge for the website and OpenAI-compatible API, while all model, memory, profile, feedback, API-key, and training-export calls are proxied to the self-hosted backend. This keeps the product usable from anywhere without requiring users to bring OpenAI keys.
 
 Suggested local environment variables for the custom local model:
 

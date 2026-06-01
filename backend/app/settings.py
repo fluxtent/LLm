@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .constants import FRONTEND_FEATURE_FLAGS
 
@@ -41,6 +42,17 @@ def _model_env(name: str, default: str = "") -> str:
     if not value or value == name:
         return default
     return value
+
+
+def _url_env(name: str, default: str = "") -> str:
+    value = os.getenv(name, "").strip().rstrip("/")
+    return value or default
+
+
+def _is_local_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
 def _ollama_model_installed(model_name: str) -> bool:
@@ -78,6 +90,9 @@ class Settings:
     adapter_id: str = os.getenv("MEDBRIEF_ADAPTER_ID", "")
     build_sha: str = os.getenv("MEDBRIEF_BUILD_SHA", "dev")
     inference_engine: str = os.getenv("MEDBRIEF_INFERENCE_ENGINE", "")
+    remote_backend_url: str = _url_env("MEDBRIEF_REMOTE_BACKEND_URL")
+    remote_backend_api_key: str = os.getenv("MEDBRIEF_REMOTE_BACKEND_API_KEY", "")
+    remote_backend_timeout_seconds: float = float(os.getenv("MEDBRIEF_REMOTE_BACKEND_TIMEOUT_SECONDS", "180"))
     openai_api_key: str = os.getenv("MEDBRIEF_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
     openai_base_url: str = os.getenv("MEDBRIEF_OPENAI_BASE_URL", "https://api.openai.com")
     allow_external_openai: bool = _bool_env("MEDBRIEF_ALLOW_EXTERNAL_OPENAI", False)
@@ -143,6 +158,8 @@ class Settings:
 
     @property
     def active_engine(self) -> str:
+        if self.remote_backend_url:
+            return "remote"
         configured_engine = self.inference_engine.strip().lower()
         if configured_engine == "mock" and self.vllm_base_url and self.vllm_api_key:
             return "vllm"
@@ -156,6 +173,8 @@ class Settings:
 
     @property
     def runtime_model_id(self) -> str:
+        if self.active_engine == "remote":
+            return self.public_model_id
         if self.active_engine == "openai":
             return self.openai_model
         if self.active_engine == "custom":
@@ -168,6 +187,8 @@ class Settings:
 
     @property
     def runtime_base_model_id(self) -> str:
+        if self.active_engine == "remote":
+            return self.base_model_id
         if self.active_engine == "openai":
             return self.openai_model
         if self.active_engine == "custom":
@@ -188,6 +209,14 @@ class Settings:
 
     def validate_for_production(self) -> list[str]:
         errors: list[str] = []
+        if self.remote_backend_url:
+            parsed = urlparse(self.remote_backend_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                errors.append("MEDBRIEF_REMOTE_BACKEND_URL must be a valid http(s) URL")
+            if self.environment.lower() == "production" and _is_local_url(self.remote_backend_url):
+                errors.append("MEDBRIEF_REMOTE_BACKEND_URL cannot point to localhost in production")
+            return errors
+
         if self.active_engine not in {"custom", "mock", "openai", "ollama", "vllm"}:
             errors.append(f"unsupported MEDBRIEF_INFERENCE_ENGINE: {self.active_engine}")
         if self.active_engine == "mock":

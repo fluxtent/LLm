@@ -9,7 +9,9 @@ import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
@@ -65,6 +67,19 @@ RATE_LIMIT_BUCKETS: defaultdict[str, list[float]] = defaultdict(list)
 GENERIC_CACHE: dict[str, tuple[float, dict[str, object], str]] = {}
 CACHE_TTL_SECONDS = 300
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "recall-app"
+REMOTE_PROXY_PATHS = ("/health", "/api", "/runtime-config.json", "/v1")
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "content-encoding",
+    "content-length",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
 
 
 class ModelUnavailableError(RuntimeError):
@@ -82,6 +97,79 @@ def _model_unavailable_message(exc: Exception) -> str:
     if "timed out" in detail.lower() or "timeout" in detail.lower():
         return "model backend unavailable: upstream request timed out"
     return "model backend unavailable"
+
+
+def _should_proxy_to_remote_backend(request: Request, settings: Settings) -> bool:
+    if not settings.remote_backend_url:
+        return False
+    path = request.url.path
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in REMOTE_PROXY_PATHS)
+
+
+def _is_recursive_remote_proxy(request: Request, settings: Settings) -> bool:
+    remote = urlparse(settings.remote_backend_url)
+    request_host = (request.url.hostname or "").lower()
+    remote_host = (remote.hostname or "").lower()
+    return bool(request_host and remote_host and request_host == remote_host)
+
+
+def _proxy_headers(request: Request, settings: Settings) -> dict[str, str]:
+    headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "host"
+    }
+    if settings.remote_backend_api_key and "authorization" not in {key.lower() for key in headers}:
+        headers["authorization"] = f"Bearer {settings.remote_backend_api_key}"
+    headers["x-medbrief-edge"] = "vercel"
+    return headers
+
+
+def _response_headers(upstream: httpx.Response) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in upstream.headers.items()
+        if key.lower() not in HOP_BY_HOP_HEADERS
+    }
+
+
+async def _proxy_to_remote_backend(request: Request, settings: Settings) -> Response:
+    if _is_recursive_remote_proxy(request, settings):
+        return JSONResponse(
+            status_code=508,
+            content={
+                "detail": "MEDBRIEF_REMOTE_BACKEND_URL points back to this deployment; configure it to a separate self-hosted backend URL."
+            },
+        )
+
+    upstream_url = f"{settings.remote_backend_url}{request.url.path}"
+    if request.url.query:
+        upstream_url = f"{upstream_url}?{request.url.query}"
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.remote_backend_timeout_seconds) as client:
+            upstream = await client.request(
+                request.method,
+                upstream_url,
+                content=await request.body(),
+                headers=_proxy_headers(request, settings),
+            )
+    except httpx.HTTPError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": "remote MedBrief backend unavailable",
+                "backend": settings.remote_backend_url,
+                "error": str(exc),
+            },
+        )
+
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_response_headers(upstream),
+        media_type=upstream.headers.get("content-type"),
+    )
 
 
 def _count_tokens_rough(text: str) -> int:
@@ -550,6 +638,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def remote_backend_proxy(request: Request, call_next):
+        if _should_proxy_to_remote_backend(request, settings):
+            return await _proxy_to_remote_backend(request, settings)
+        return await call_next(request)
 
     @app.on_event("startup")
     async def warm_runtime_model() -> None:

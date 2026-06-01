@@ -11,11 +11,16 @@ uvicorn backend.app.main:app --reload --port 8001
 
 The gateway supports `custom`, `ollama`, `vllm`, `openai`, and `mock` engines. The default is `custom`, which loads MedBrief's own checkpoint from `model.pth` with `vocab.json` and `merges.pkl`. The self-run defaults do not use external AI providers, and scripted local-response fallback is disabled unless you explicitly opt in for demos.
 
+For worldwide use, deploy one self-hosted backend with a public HTTPS URL and point Vercel at it with `MEDBRIEF_REMOTE_BACKEND_URL`. In that mode Vercel is only the global edge/front door; the self-hosted backend owns model inference, memory, profile storage, generated API keys, feedback, and training export.
+
 If you set `MEDBRIEF_ENV=production`, startup now fails loudly when the gateway is still pointed at `mock` or is using the default insecure API key.
 
 ## Expected environment variables
 
 - `MEDBRIEF_INFERENCE_ENGINE`: `custom`, `ollama`, `vllm`, `openai`, or `mock`
+- `MEDBRIEF_REMOTE_BACKEND_URL`: public self-hosted MedBrief backend URL used by Vercel/global edge deployments
+- `MEDBRIEF_REMOTE_BACKEND_API_KEY`: optional bearer key Vercel adds when proxying to the remote backend
+- `MEDBRIEF_REMOTE_BACKEND_TIMEOUT_SECONDS`: timeout for global-edge proxy calls, default `180`
 - `MEDBRIEF_CUSTOM_MODEL_PATH`: path to the MedBrief checkpoint, default `model.pth`
 - `MEDBRIEF_CUSTOM_VOCAB_PATH`: path to the MedBrief tokenizer vocabulary, default `vocab.json`
 - `MEDBRIEF_CUSTOM_MERGES_PATH`: path to the MedBrief tokenizer merges, default `merges.pkl`
@@ -53,3 +58,17 @@ If you set `MEDBRIEF_ENV=production`, startup now fails loudly when the gateway 
 - `DELETE /api/keys/{key_id}`
 
 `GET /v1/training/export` returns local JSONL by default and is protected by the same admin controls as API-key management. Captured interactions are training candidates for offline review, SFT, or preference-data creation; chat requests do not mutate model weights live.
+
+## Global Edge Mode
+
+Use this split when the public website must work from anywhere:
+
+```text
+Browser or app
+  -> https://medbriefai.vercel.app
+  -> MEDBRIEF_REMOTE_BACKEND_URL
+  -> self-hosted MedBrief FastAPI backend
+  -> local checkpoint, Ollama, or vLLM model server
+```
+
+Do not set `MEDBRIEF_REMOTE_BACKEND_URL` to `localhost` in production; production validation rejects it because other users cannot reach a model running on your machine.

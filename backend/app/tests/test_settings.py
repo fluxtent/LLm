@@ -187,3 +187,25 @@ class SettingsValidationTests(unittest.TestCase):
 
         self.assertIsInstance(engine, UnavailableInferenceEngine)
         self.assertTrue(any("external OpenAI engine is disabled" in error for error in errors))
+
+    def test_remote_backend_mode_is_preferred_for_global_edge_deployments(self) -> None:
+        settings = Settings(
+            environment="production",
+            remote_backend_url="https://api.medbrief.example",
+            vllm_base_url="https://old-provider.example/v1",
+            vllm_api_key="old-key",
+        )
+
+        self.assertEqual(settings.active_engine, "remote")
+        self.assertEqual(settings.runtime_model_id, "medbrief-phi3-med")
+        self.assertEqual(settings.validate_for_production(), [])
+
+    def test_remote_backend_rejects_localhost_in_production(self) -> None:
+        settings = Settings(
+            environment="production",
+            remote_backend_url="http://127.0.0.1:8001",
+        )
+
+        errors = settings.validate_for_production()
+
+        self.assertTrue(any("cannot point to localhost" in error for error in errors))
