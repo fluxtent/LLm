@@ -16,6 +16,7 @@ from .constants import (
 from .medical_ontology import detect_medical_context
 from .schemas import ChatCompletionRequest, ModeLiteral, UserProfile
 from .safety import is_crisis
+from .web_search import WebSearchContext
 
 
 MEMORY_SUMMARY_BLOCKLIST = (
@@ -64,6 +65,7 @@ class PromptBundle:
     mode: ModeLiteral
     latest_user_text: str
     upstream_messages: list[dict[str, str]]
+    search_context: WebSearchContext | None = None
 
 
 def detect_mode(text: str) -> ModeLiteral:
@@ -203,7 +205,10 @@ def _merge_system_messages(
     return merged
 
 
-def build_prompt_bundle(request: ChatCompletionRequest) -> PromptBundle:
+def build_prompt_bundle(
+    request: ChatCompletionRequest,
+    search_context: WebSearchContext | None = None,
+) -> PromptBundle:
     latest_user_text = next(
         _strip_mode_tag(message.content) for message in reversed(request.messages) if message.role == "user"
     )
@@ -239,12 +244,28 @@ def build_prompt_bundle(request: ChatCompletionRequest) -> PromptBundle:
             ontology_bits.append(f"Procedures mentioned: {', '.join(medical_context.procedures[:3])}")
         if ontology_bits:
             upstream_messages.append({"role": "system", "content": " ".join(ontology_bits)})
+
+    if search_context and search_context.used:
+        context_text = search_context.as_context_text()
+        if context_text:
+            upstream_messages.append({
+                "role": "system",
+                "content": (
+                    context_text
+                    + "\n\nUse the above sources to inform your answer. "
+                    "Synthesize the information in plain language. Do not quote sources verbatim — "
+                    "explain the key points clearly. Mention that the information comes from peer-reviewed "
+                    "research or authoritative medical sources when relevant."
+                ),
+            })
+
     upstream_messages.extend(_truncate_history(conversational, max_prompt_tokens=1800))
 
     return PromptBundle(
         mode=mode,
         latest_user_text=latest_user_text,
         upstream_messages=upstream_messages,
+        search_context=search_context,
     )
 
 
