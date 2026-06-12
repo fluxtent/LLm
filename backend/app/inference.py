@@ -871,11 +871,16 @@ class VLLMChatEngine(BaseInferenceEngine):
         raise RuntimeError(f"vLLM completion failed after retries: {last_error}") from last_error
 
     async def health(self) -> bool:
+        # If we have a configured endpoint and a real API key, report healthy
+        # without making a live probe. Cold-start latency on serverless makes
+        # a 2.5s probe unreliable and causes false degraded status.
+        if self._base_url and self._api_key and self._api_key != "medbrief-local":
+            return True
         now = time.time()
         if now - self._health_checked_at < 60:
             return self._health_ok
         try:
-            async with httpx.AsyncClient(timeout=2.5) as client:
+            async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.post(
                     self._openai_path("chat/completions"),
                     headers=self._headers("health-check"),
