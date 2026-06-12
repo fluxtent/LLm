@@ -97,11 +97,14 @@ class Settings:
     openai_base_url: str = os.getenv("MEDBRIEF_OPENAI_BASE_URL", "https://api.openai.com")
     allow_external_openai: bool = _bool_env("MEDBRIEF_ALLOW_EXTERNAL_OPENAI", False)
     openai_model: str = os.getenv("MEDBRIEF_OPENAI_MODEL", "")
-    vllm_base_url: str = os.getenv("MEDBRIEF_VLLM_BASE_URL", os.getenv("LLM_PROVIDER_BASE_URL", ""))
-    vllm_api_key: str = os.getenv("MEDBRIEF_VLLM_API_KEY", os.getenv("LLM_PROVIDER_API_KEY", "medbrief-local"))
+    vllm_base_url: str = os.getenv("MEDBRIEF_VLLM_BASE_URL", os.getenv("LLM_PROVIDER_BASE_URL",
+        "https://api.groq.com/openai/v1" if os.getenv("GROQ_API_KEY") else ""))
+    vllm_api_key: str = os.getenv("MEDBRIEF_VLLM_API_KEY", os.getenv("LLM_PROVIDER_API_KEY",
+        os.getenv("GROQ_API_KEY", "medbrief-local")))
     vllm_model: str = _model_env(
         "MEDBRIEF_VLLM_MODEL",
-        _model_env("LLM_MODEL_BACKEND", DEFAULT_SELF_HOSTED_MODEL_ID),
+        _model_env("LLM_MODEL_BACKEND",
+        _model_env("GROQ_MODEL", DEFAULT_SELF_HOSTED_MODEL_ID)),
     )
     vllm_signing_secret: str = os.getenv("MEDBRIEF_VLLM_SIGNING_SECRET", "")
     ai_gateway_api_key: str = os.getenv("AI_GATEWAY_API_KEY", "")

@@ -97,6 +97,8 @@ def _model_unavailable_message(exc: Exception) -> str:
         return "model backend unavailable: upstream authentication failed"
     if "timed out" in detail.lower() or "timeout" in detail.lower():
         return "model backend unavailable: upstream request timed out"
+    if detail:
+        return f"model backend unavailable: {detail[:200]}"
     return "model backend unavailable"
 
 

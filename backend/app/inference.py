@@ -831,13 +831,6 @@ class VLLMChatEngine(BaseInferenceEngine):
             "top_p": top_p,
             "stream": False,
         }
-        if not self._is_vercel_ai_gateway:
-            payload["extra_body"] = {
-                "mode": mode,
-                "request_id": request_id,
-                "conversation_id": conversation_id,
-                "preferences": profile.preferences.model_dump() if profile else None,
-            }
 
         delay = 0.5
         last_error: Exception | None = None
