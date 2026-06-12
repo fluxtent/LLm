@@ -643,11 +643,15 @@ async def _generate_completion(
 
 
 def create_app() -> FastAPI:
+    import logging as _logging
     settings = get_settings()
     if settings.environment.lower() == "production":
         errors = settings.validate_for_production()
         if errors:
-            raise RuntimeError("Production config errors: " + "; ".join(errors))
+            _logging.getLogger(__name__).warning(
+                "Production config warnings (app will start but model may be unavailable): %s",
+                "; ".join(errors),
+            )
     engine = create_inference_engine(settings)
     fallback_engine: BaseInferenceEngine | None = (
         LocalResponderEngine() if settings.allow_local_responder_fallback else None
