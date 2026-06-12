@@ -905,7 +905,7 @@ class ResilientInferenceEngine(BaseInferenceEngine):
         return [engine.name for engine in self._engines]
 
     async def complete(self, **kwargs: Any) -> InferenceResult:
-        last_error: Exception | None = None
+        errors: list[str] = []
         for index, engine in enumerate(self._engines):
             try:
                 result = await engine.complete(**kwargs)
@@ -919,10 +919,10 @@ class ResilientInferenceEngine(BaseInferenceEngine):
                         latency_ms=result.latency_ms,
                         upstream_model=upstream,
                     )
-                last_error = RuntimeError(f"{engine.name} returned an empty response")
+                errors.append(f"{engine.name}: empty response")
             except Exception as exc:
-                last_error = exc
-        raise RuntimeError(f"all generative model engines failed: {last_error}") from last_error
+                errors.append(f"{engine.name}: {exc}")
+        raise RuntimeError(f"all engines failed: {'; '.join(errors)}")
 
     async def health(self) -> bool:
         for engine in self._engines:

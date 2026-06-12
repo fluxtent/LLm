@@ -123,7 +123,7 @@ class Settings:
     stream_default: bool = _bool_env("MEDBRIEF_STREAM_DEFAULT", True)
     model_failover_enabled: bool = _bool_env("MEDBRIEF_MODEL_FAILOVER_ENABLED", True)
     model_failover_order: tuple[str, ...] = field(
-        default_factory=lambda: _list_env("MEDBRIEF_MODEL_FAILOVER_ORDER", "vllm,ollama,custom")
+        default_factory=lambda: _list_env("MEDBRIEF_MODEL_FAILOVER_ORDER", "vllm,ollama")
     )
     gpu_type: str = os.getenv("MEDBRIEF_GPU_TYPE", "L4")
     runtime_config_api_base: str = os.getenv("MEDBRIEF_RUNTIME_API_BASE", "")
