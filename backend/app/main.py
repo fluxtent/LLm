@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .constants import FRONTEND_FEATURE_FLAGS, PRIVACY_DISCLAIMER, SUPPORTED_MODES
 from .inference import BaseInferenceEngine, LocalResponderEngine, MockInferenceEngine, create_inference_engine
+from .web_search import WebSearchContext, search_for_query, should_search
 from .personalization import (
     apply_memory_updates,
     build_personalization_context,
@@ -183,9 +184,10 @@ def _build_chat_response(
     model_id: str,
     prompt_tokens: int,
     finish_reason: str = "stop",
+    search_sources: list[dict[str, str]] | None = None,
 ) -> dict[str, object]:
     completion_tokens = _count_tokens_rough(response_text)
-    return {
+    body: dict[str, object] = {
         "id": f"chatcmpl-{request_id}",
         "object": "chat.completion",
         "created": int(time.time()),
@@ -203,6 +205,9 @@ def _build_chat_response(
             "total_tokens": prompt_tokens + completion_tokens,
         },
     }
+    if search_sources:
+        body["search_sources"] = search_sources
+    return body
 
 
 def _make_cache_key(request: ChatCompletionRequest, prompt_bundle: PromptBundle) -> str | None:
@@ -415,7 +420,22 @@ async def _generate_completion(
     if request.mode is None:
         request.mode = response_plan.mode
     request.messages.insert(0, ChatMessage(role="system", content=response_plan.to_system_prompt()))
-    prompt_bundle: PromptBundle = build_prompt_bundle(request)
+
+    # Run web search concurrently for health/general queries
+    latest_user_text = next(
+        (message.content for message in reversed(request.messages) if message.role == "user"), ""
+    )
+    search_context: WebSearchContext | None = None
+    if should_search(latest_user_text):
+        try:
+            search_context = await asyncio.wait_for(
+                search_for_query(latest_user_text, max_results=4),
+                timeout=8.0,
+            )
+        except Exception:
+            search_context = None
+
+    prompt_bundle: PromptBundle = build_prompt_bundle(request, search_context=search_context)
     prompt_tokens = sum(_count_tokens_rough(message["content"]) for message in prompt_bundle.upstream_messages)
     max_tokens, temperature, top_p = _resolve_generation_settings(request, prompt_bundle)
     safety_decision = evaluate_request(prompt_bundle.mode, prompt_bundle.latest_user_text)
@@ -584,6 +604,7 @@ async def _generate_completion(
         model_id=upstream_model,
         prompt_tokens=prompt_tokens,
         finish_reason=finish_reason,
+        search_sources=search_context.to_serializable() if search_context and search_context.used else None,
     )
     telemetry = {
         "request_id": request_id,
@@ -637,6 +658,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Request-ID", "X-Search-Sources"],
     )
 
     @app.middleware("http")
@@ -836,6 +858,18 @@ def create_app() -> FastAPI:
         emit_event("user_deleted", user_id=user_id)
         return DeleteUserResponse(user_id=user_id, deleted=True)
 
+    @app.get("/v1/search")
+    async def web_search(q: str, http_request: Request) -> JSONResponse:
+        _rate_limit_or_raise(http_request, "search", limit=20, window_seconds=60)
+        _validate_optional_api_key(http_request, settings)
+        if not q or len(q.strip()) < 3:
+            return JSONResponse({"results": [], "query": q})
+        try:
+            context = await asyncio.wait_for(search_for_query(q, max_results=5), timeout=10.0)
+        except asyncio.TimeoutError:
+            return JSONResponse({"results": [], "query": q, "error": "search timed out"})
+        return JSONResponse({"results": context.to_serializable(), "query": context.query, "used": context.used})
+
     @app.post("/v1/chat/completions")
     async def chat_completions(request: ChatCompletionRequest, http_request: Request) -> Response:
         _rate_limit_or_raise(http_request, "chat", limit=30, window_seconds=60)
@@ -855,6 +889,10 @@ def create_app() -> FastAPI:
 
         emit_event("chat_completion", **telemetry)
         headers = {"X-Request-ID": telemetry["request_id"]}
+        search_sources = response_body.get("search_sources")
+        if search_sources:
+            headers["X-Search-Sources"] = json.dumps(search_sources)
+            headers["Access-Control-Expose-Headers"] = "X-Request-ID, X-Search-Sources"
 
         if request.stream:
             return StreamingResponse(

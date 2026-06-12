@@ -252,9 +252,45 @@ document.addEventListener('DOMContentLoaded', () => {
     scrollToBottom();
   }
 
+  const MEDICAL_SEARCH_TERMS = ['symptom','disease','condition','treatment','medication','drug','diagnosis',
+    'syndrome','disorder','infection','cancer','pain','therapy','surgery','inflammation','chronic',
+    'heart','lung','kidney','liver','brain','blood','diabetes','hypertension','stroke','allergy',
+    'vaccine','antibiotic','vitamin','hormone','immune','anxiety','depression','itis','ology'];
+
+  function looksLikeMedicalQuery(text) {
+    const lower = text.toLowerCase();
+    return MEDICAL_SEARCH_TERMS.some(t => lower.includes(t));
+  }
+
+  function showSearchIndicator() {
+    hideSearchIndicator();
+    const el = document.createElement('div');
+    el.id = 'search-indicator';
+    el.className = 'search-indicator';
+    el.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 2"/>
+      </svg>
+      Searching medical databases…
+    `;
+    messagesContainer.appendChild(el);
+    scrollToBottom();
+  }
+
+  function hideSearchIndicator() {
+    const el = document.getElementById('search-indicator');
+    if (el) el.remove();
+  }
+
   async function requestAssistantReply(text) {
     clearRequestErrors();
-    setStatus('thinking');
+    const isMedical = looksLikeMedicalQuery(text);
+    if (isMedical) {
+      setStatus('searching');
+      showSearchIndicator();
+    } else {
+      setStatus('thinking');
+    }
     showTypingIndicator();
 
     await engine.sendMessage(
@@ -262,17 +298,21 @@ document.addEventListener('DOMContentLoaded', () => {
       text,
       (chunk) => {
         hideTypingIndicator();
+        hideSearchIndicator();
+        if (isMedical) setStatus('thinking');
         appendAssistantChunk(chunk);
         scrollToBottom();
       },
-      (fullContent) => {
-        finalizeAssistantMessage(fullContent);
+      (fullContent, searchSources) => {
+        hideSearchIndicator();
+        finalizeAssistantMessage(fullContent, searchSources);
         setStatus('ready');
         renderConversationList();
         scrollToBottom();
       },
       (error) => {
         hideTypingIndicator();
+        hideSearchIndicator();
         console.error(error);
         if (currentAssistantContent.trim()) {
           finalizeAssistantMessage(currentAssistantContent);
@@ -298,8 +338,8 @@ document.addEventListener('DOMContentLoaded', () => {
         appendAssistantChunk(chunk);
         scrollToBottom();
       },
-      (fullContent) => {
-        finalizeAssistantMessage(fullContent);
+      (fullContent, searchSources) => {
+        finalizeAssistantMessage(fullContent, searchSources);
         setStatus('ready');
         renderConversationList();
         scrollToBottom();
@@ -370,7 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
     msgEl.className = 'message user';
     msgEl.innerHTML = `
       <div class="message-avatar">You</div>
-      <div>
+      <div class="message-body">
         <div class="message-content"><p>${escapeHtml(text)}</p></div>
         <div class="message-meta"><span class="message-time">${timeStr}</span></div>
       </div>
@@ -397,7 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <path d="M14 8V20M8 14H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </div>
-        <div>
+        <div class="message-body">
           <div class="message-content"></div>
           <div class="message-meta"><span class="message-time">${timeStr}</span></div>
         </div>
@@ -410,10 +450,39 @@ document.addEventListener('DOMContentLoaded', () => {
     contentEl.innerHTML = engine.parseMarkdown(currentAssistantContent);
   }
 
-  function finalizeAssistantMessage(fullContent) {
+  function renderSearchSources(sources) {
+    if (!sources || !sources.length) return '';
+    const chips = sources.map(s => {
+      const label = s.source === 'pubmed' ? 'PubMed' : s.source === 'wikipedia' ? 'Wikipedia' : 'Web';
+      const cls = s.source === 'pubmed' ? 'pubmed' : s.source === 'wikipedia' ? 'wikipedia' : 'web';
+      const title = escapeHtml((s.title || '').replace(/\(\d{4}\)$/, '').trim());
+      const href = escapeHtml(s.url || '#');
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="source-chip">
+        <span class="source-badge ${cls}">${label}</span>
+        <span class="source-title">${title}</span>
+      </a>`;
+    }).join('');
+    return `<div class="search-sources">
+      <div class="search-sources-label">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.3"/>
+          <path d="M6 3.5v3l1.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+        Sources
+      </div>
+      <div class="sources-list">${chips}</div>
+    </div>`;
+  }
+
+  function finalizeAssistantMessage(fullContent, searchSources) {
     if (currentAssistantEl) {
       const contentEl = currentAssistantEl.querySelector('.message-content');
       contentEl.innerHTML = engine.parseMarkdown(fullContent);
+
+      if (searchSources && searchSources.length) {
+        contentEl.insertAdjacentHTML('beforeend', renderSearchSources(searchSources));
+      }
+
       const conversationId = currentConversationId;
       if (RECALL_CONFIG.ENABLED_FEATURES?.feedbackEnabled && conversationId) {
         addFeedbackControls(currentAssistantEl, conversationId, fullContent);
@@ -477,15 +546,18 @@ document.addEventListener('DOMContentLoaded', () => {
   function setStatus(status, detail = '') {
     const dot = headerStatus.querySelector('.status-dot');
     const span = headerStatus.querySelector('span');
+    dot.className = 'status-dot';
 
     if (status === 'thinking') {
-      dot.style.background = 'var(--accent-primary)';
+      dot.classList.add('thinking');
       span.textContent = 'MedBrief AI is thinking…';
+    } else if (status === 'searching') {
+      dot.classList.add('searching');
+      span.textContent = 'Searching medical databases…';
     } else if (status === 'degraded') {
-      dot.style.background = '#F59E0B';
+      dot.style.background = 'var(--warning)';
       span.textContent = detail || 'MedBrief AI is in degraded mode';
     } else {
-      dot.style.background = 'var(--success)';
       span.textContent = 'MedBrief AI is ready';
     }
   }
@@ -566,7 +638,7 @@ document.addEventListener('DOMContentLoaded', () => {
     el.className = 'message user';
     el.innerHTML = `
       <div class="message-avatar">You</div>
-      <div>
+      <div class="message-body">
         <div class="message-content"><p>${escapeHtml(msg.content)}</p></div>
         <div class="message-meta"><span class="message-time">${time}</span></div>
       </div>
@@ -585,7 +657,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <path d="M14 8V20M8 14H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
       </div>
-      <div>
+      <div class="message-body">
         <div class="message-content">${engine.parseMarkdown(msg.content)}</div>
         <div class="message-meta"><span class="message-time">${time}</span></div>
       </div>

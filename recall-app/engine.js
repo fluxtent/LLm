@@ -319,6 +319,14 @@ class RecallEngine {
     }
   }
 
+  _parseSearchSources(response) {
+    try {
+      const header = response.headers.get('X-Search-Sources');
+      if (header) return JSON.parse(header);
+    } catch {}
+    return null;
+  }
+
   async streamRequest(messages, conversationId, memorySummary, isCrisis, mode, requestId, userMessage, onChunk, onComplete) {
     const response = await fetch(RECALL_CONFIG.API_ENDPOINT, {
       method: 'POST',
@@ -343,6 +351,7 @@ class RecallEngine {
       throw await this.createErrorFromResponse(response);
     }
 
+    const searchSources = this._parseSearchSources(response);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullContent = '';
@@ -381,7 +390,7 @@ class RecallEngine {
 
     this.memory.addMessage(conversationId, 'assistant', finalContent);
     this.isGenerating = false;
-    onComplete(finalContent);
+    onComplete(finalContent, searchSources);
   }
 
   async standardRequest(messages, conversationId, memorySummary, isCrisis, mode, requestId, userMessage, onChunk, onComplete) {
@@ -410,11 +419,14 @@ class RecallEngine {
 
     const data = await response.json();
     const content = this.cleanResponse(data.choices?.[0]?.message?.content || '');
+    const searchSources = data.search_sources || null;
     if (!content) {
       throw new Error('The backend returned an empty response.');
     }
 
-    this.typeResponse(content, conversationId, isCrisis, onChunk, onComplete);
+    this.typeResponse(content, conversationId, isCrisis, onChunk, (finalContent) => {
+      onComplete(finalContent, searchSources);
+    });
   }
 
   typeResponse(content, conversationId, isCrisis, onChunk, onComplete) {
