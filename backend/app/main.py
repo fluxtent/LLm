@@ -350,7 +350,11 @@ def _validate_optional_api_key(request: Request, settings: Settings) -> dict[str
     if token:
         record = STORE.authenticate_api_key(token)
         if record is None:
-            raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+            # Key is present but invalid. Only block when keys are strictly required;
+            # otherwise ignore stale/wrong keys so users aren't locked out after redeploys.
+            if settings.require_api_key:
+                raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+            return None
         request.state.api_key_id = record["id"]
         return record
     if settings.require_api_key:
